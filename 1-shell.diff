@@ -398,11 +398,11 @@ index e69de29..872ccdb 100644
 +Marking `v' mutable does the trick.
 \ No newline at end of file
 diff --git a/ferris-wheel/questions/mutability-2 b/ferris-wheel/questions/mutability-2
-index e69de29..6139dfd 100644
+index e69de29..94cb938 100644
 --- a/ferris-wheel/questions/mutability-2
 +++ b/ferris-wheel/questions/mutability-2
 @@ -0,0 +1 @@
-+Replace `let x' with `let ref mut x' to make `x' a reference to a mutable integer.
++Replace `let x' with `let ref mut x' to make `x' a reference to a mutable integer. Using `&mut i32' as the type explicitly also does the trick.
 \ No newline at end of file
 diff --git a/ferris-wheel/questions/mutability-3 b/ferris-wheel/questions/mutability-3
 index e69de29..2124347 100644
@@ -653,14 +653,14 @@ index e69de29..41bdbb2 100644
 +Because `StackVec' uses a fixed stack memory for storing its items, but `Vec' expands its allocated memory region when necessary.
 \ No newline at end of file
 diff --git a/stack-vec/src/lib.rs b/stack-vec/src/lib.rs
-index bbec5aa..4041d24 100644
+index bbec5aa..fbf57a8 100644
 --- a/stack-vec/src/lib.rs
 +++ b/stack-vec/src/lib.rs
 @@ -4,6 +4,8 @@
  #[cfg(test)]
  mod tests;
  
-+use core::ops::*;
++use core::ops::{Deref, DerefMut};
 +
  /// A contiguous array type backed by a slice.
  ///
