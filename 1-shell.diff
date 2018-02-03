@@ -594,24 +594,17 @@ index e0aba5b..eee0376 100644
  
  fn main() {
 diff --git a/ferris-wheel/run-pass/ufcs.rs b/ferris-wheel/run-pass/ufcs.rs
-index 319b54b..f70137a 100644
+index 319b54b..a5b576b 100644
 --- a/ferris-wheel/run-pass/ufcs.rs
 +++ b/ferris-wheel/run-pass/ufcs.rs
-@@ -7,7 +7,7 @@ pub trait Foo {
- }
- 
- pub trait FooToo {
--    fn foo(&self) -> usize { 2 }
-+    fn foo2(&self) -> usize { 2 }
- }
- 
- impl Foo for Dummy { }
-@@ -18,7 +18,7 @@ fn main() {
+@@ -17,8 +17,8 @@ impl FooToo for Dummy { }
+ fn main() {
      let dummy = Dummy;
  
-     let x = dummy.foo();
+-    let x = dummy.foo();
 -    let y = dummy.foo();
-+    let y = dummy.foo2();
++    let x = Foo::foo(&dummy);
++    let y = FooToo::foo(&dummy);
  
      // Values for `x` and `y` must come from calling `foo()` methods.
      assert_eq!(x, 1);
