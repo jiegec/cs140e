@@ -1,0 +1,108 @@
+diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
+index 9eacec9..98226c2 100644
+--- a/kernel/src/kmain.rs
++++ b/kernel/src/kmain.rs
+@@ -12,12 +12,28 @@
+ extern crate pi;
+ extern crate stack_vec;
+ 
++use pi::gpio::Gpio;
++use pi::timer::spin_sleep_ms;
++
+ pub mod lang_items;
+ pub mod mutex;
+ pub mod console;
+ pub mod shell;
+ 
++fn blinky() {
++    let mut pin16 = Gpio::new(16);
++    let mut pin_out16 = pin16.into_output();
++
++    loop {
++        pin_out16.set();
++        spin_sleep_ms(1000);
++        pin_out16.clear();
++        spin_sleep_ms(1000);
++    }
++}
++
+ #[no_mangle]
+ pub extern "C" fn kmain() {
+     // FIXME: Start the shell.
++    blinky();
+ }
+diff --git a/pi/src/gpio.rs b/pi/src/gpio.rs
+index 92f4233..65c2ab8 100644
+--- a/pi/src/gpio.rs
++++ b/pi/src/gpio.rs
+@@ -102,7 +102,8 @@ impl Gpio<Uninitialized> {
+     /// Enables the alternative function `function` for `self`. Consumes self
+     /// and returns a `Gpio` structure in the `Alt` state.
+     pub fn into_alt(self, function: Function) -> Gpio<Alt> {
+-        unimplemented!()
++        self.registers.FSEL[(self.pin / 10) as usize].write((function as u32) << (3 * (self.pin % 10)));
++        self.transition()
+     }
+ 
+     /// Sets this pin to be an _output_ pin. Consumes self and returns a `Gpio`
+@@ -121,12 +122,12 @@ impl Gpio<Uninitialized> {
+ impl Gpio<Output> {
+     /// Sets (turns on) the pin.
+     pub fn set(&mut self) {
+-        unimplemented!()
++        self.registers.SET[(self.pin / 32) as usize].write(1 << (self.pin % 32));
+     }
+ 
+     /// Clears (turns off) the pin.
+     pub fn clear(&mut self) {
+-        unimplemented!()
++        self.registers.CLR[(self.pin / 32) as usize].write(1 << (self.pin % 32));
+     }
+ }
+ 
+@@ -134,6 +135,6 @@ impl Gpio<Input> {
+     /// Reads the pin's value. Returns `true` if the level is high and `false`
+     /// if the level is low.
+     pub fn level(&mut self) -> bool {
+-        unimplemented!()
++        self.registers.LEV[(self.pin / 32) as usize].has_mask(1 << (self.pin % 32))
+     }
+ }
+diff --git a/pi/src/timer.rs b/pi/src/timer.rs
+index e0aa184..bb5aad6 100644
+--- a/pi/src/timer.rs
++++ b/pi/src/timer.rs
+@@ -30,21 +30,29 @@ impl Timer {
+     /// Reads the system timer's counter and returns the 64-bit counter value.
+     /// The returned value is the number of elapsed microseconds.
+     pub fn read(&self) -> u64 {
+-        unimplemented!()
++        let low = self.registers.CLO.read();
++        let high = self.registers.CHI.read();
++        ((high as u64) << 32) | (low as u64)
+     }
+ }
+ 
+ /// Returns the current time in microseconds.
+ pub fn current_time() -> u64 {
+-    unimplemented!()
++    Timer::new().read()
+ }
+ 
+ /// Spins until `us` microseconds have passed.
+ pub fn spin_sleep_us(us: u64) {
+-    unimplemented!()
++    let old = current_time();
++    loop {
++        let new = current_time();
++        if old + us >= new {
++            break;
++        }
++    }
+ }
+ 
+ /// Spins until `ms` milliseconds have passed.
+ pub fn spin_sleep_ms(ms: u64) {
+-    unimplemented!()
++    spin_sleep_us(ms * 1000);
+ }

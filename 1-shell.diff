@@ -615,6 +615,18 @@ index e69de29..57165ed 100644
 @@ -0,0 +1 @@
 +GPIO27: GPFSEL2, GPSET0, GPCLR0, Pin 13 on the left
 \ No newline at end of file
+diff --git a/questions/blinky-states b/questions/blinky-states
+index e69de29..774e963 100644
+--- a/questions/blinky-states
++++ b/questions/blinky-states
+@@ -0,0 +1 @@
++START -> OUTPUT -> SET -> CLEAR -> SET -> CLEAR -> ...
+diff --git a/questions/fake-states b/questions/fake-states
+index e69de29..babd3c9 100644
+--- a/questions/fake-states
++++ b/questions/fake-states
+@@ -0,0 +1 @@
++If user faked a GPIO pin to state `Input', but the pin has not been initialized to allow input, it would disobey the hardware's spec.
 diff --git a/stack-vec/questions/clone-for-pop b/stack-vec/questions/clone-for-pop
 index e69de29..8e6d930 100644
 --- a/stack-vec/questions/clone-for-pop
