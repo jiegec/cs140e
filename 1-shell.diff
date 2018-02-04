@@ -897,6 +897,74 @@ index bbec5aa..fbf57a8 100644
 +    }
 +}
 +*/
+diff --git a/ttywrite/src/main.rs b/ttywrite/src/main.rs
+index 08d89e8..eba3573 100644
+--- a/ttywrite/src/main.rs
++++ b/ttywrite/src/main.rs
+@@ -47,6 +47,10 @@ struct Opt {
+     raw: bool,
+ }
+ 
++fn progress_fn(progress: Progress) {
++    println!("Progress: {:?}", progress);
++}
++
+ fn main() {
+     use std::fs::File;
+     use std::io::{self, BufReader, BufRead};
+@@ -55,4 +59,36 @@ fn main() {
+     let mut serial = serial::open(&opt.tty_path).expect("path points to invalid TTY");
+ 
+     // FIXME: Implement the `ttywrite` utility.
++    let mut settings = serial.read_settings().expect("device should be valid");
++    settings.set_baud_rate(opt.baud_rate).expect("baud rate should be valid");
++    settings.set_stop_bits(opt.stop_bits);
++    settings.set_flow_control(opt.flow_control);
++    settings.set_char_size(opt.char_width);
++    serial.write_settings(&settings).expect("settings should be valid");
++    serial.set_timeout(Duration::new(opt.timeout, 0)).expect("timeout should be valid");
++
++    if opt.raw {
++        match opt.input {
++            Some(ref path) => {
++                let mut input = File::open(path).expect("file should exist");
++                io::copy(&mut input, &mut serial).expect("io transfer should succeed");
++            },
++            None => {
++                let mut input = io::stdin();
++                io::copy(&mut input, &mut serial).expect("io transfer should succeed");
++            }
++        };
++    } else {
++        // XMODEM
++        match opt.input {
++            Some(ref path) => {
++                let mut input = File::open(path).expect("file should exist");
++                Xmodem::transmit_with_progress(input, serial, progress_fn).expect("xmodem transfer should succeed");
++            },
++            None => {
++                let mut input = io::stdin();
++                Xmodem::transmit_with_progress(input, serial, progress_fn).expect("xmodem transfer should succeed");
++            }
++        };
++    }
+ }
+diff --git a/ttywrite/test.sh b/ttywrite/test.sh
+index 4463494..b068e9b 100755
+--- a/ttywrite/test.sh
++++ b/ttywrite/test.sh
+@@ -34,8 +34,9 @@ socat -u ${PARAMS},link=input ${PARAMS},link=output &
+ sleep 1
+ 
+ if [[ "$(uname)" = "Darwin" ]]; then
+-  stty -f input min 0 time 1
+-  stty -f output min 0 time 1
++  # having GNU coreutils in my PATH
++  stty -F input min 0 time 1
++  stty -F output min 0 time 1
+ else
+   stty -F input min 0 time 1
+   stty -F output min 0 time 1
 diff --git a/volatile/questions/enforcing b/volatile/questions/enforcing
 index e69de29..9e2ce79 100644
 --- a/volatile/questions/enforcing
