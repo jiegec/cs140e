@@ -940,7 +940,7 @@ index e69de29..ae3aa4c 100644
 +`UniqueVolatile' means no pointer aliasing i.e. only one `UniqueVolatile' corresponds to the underlying pointer, allowing it to be thread safe. On the other side, `Volatile' does not have this restriction.
 \ No newline at end of file
 diff --git a/xmodem/src/lib.rs b/xmodem/src/lib.rs
-index c6ce954..289188b 100644
+index c6ce954..a92c939 100644
 --- a/xmodem/src/lib.rs
 +++ b/xmodem/src/lib.rs
 @@ -173,7 +173,18 @@ impl<T: io::Read + io::Write> Xmodem<T> {
@@ -1032,7 +1032,7 @@ index c6ce954..289188b 100644
      }
  
      /// Sends (uploads) a single packet to the inner stream using the XMODEM
-@@ -249,7 +311,43 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -249,7 +311,49 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      ///
      /// An error of kind `Interrupted` is returned if a packet checksum fails.
      pub fn write_packet(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -1042,8 +1042,10 @@ index c6ce954..289188b 100644
 +        }
 +
 +        if !self.started {
++            (self.progress)(Progress::Waiting);
 +            self.expect_byte(NAK, "expected NAK to start transfer")?;
 +            self.started = true;
++            (self.progress)(Progress::Started);
 +        }
 +
 +        if buf.len() == 0 {
@@ -1069,7 +1071,11 @@ index c6ce954..289188b 100644
 +
 +        let result = self.read_byte(true)?;
 +        match result {
-+            ACK => Ok(buf.len()),
++            ACK => {
++                (self.progress)(Progress::Packet(self.packet));
++                self.packet = self.packet.wrapping_add(1);
++                Ok(buf.len())
++            },
 +            NAK => Err(io::Error::new(io::ErrorKind::Interrupted, "data corrupted from receiver")),
 +            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "expected ACK or NAK"))
 +        }
