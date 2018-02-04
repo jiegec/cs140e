@@ -69,7 +69,7 @@ index 92f4233..65c2ab8 100644
      }
  }
 diff --git a/pi/src/timer.rs b/pi/src/timer.rs
-index e0aa184..bb5aad6 100644
+index e0aa184..db60af2 100644
 --- a/pi/src/timer.rs
 +++ b/pi/src/timer.rs
 @@ -30,21 +30,29 @@ impl Timer {
@@ -95,7 +95,7 @@ index e0aa184..bb5aad6 100644
 +    let old = current_time();
 +    loop {
 +        let new = current_time();
-+        if old + us >= new {
++        if old + us <= new {
 +            break;
 +        }
 +    }
