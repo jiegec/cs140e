@@ -897,3 +897,45 @@ index bbec5aa..fbf57a8 100644
 +    }
 +}
 +*/
+diff --git a/volatile/questions/enforcing b/volatile/questions/enforcing
+index e69de29..9e2ce79 100644
+--- a/volatile/questions/enforcing
++++ b/volatile/questions/enforcing
+@@ -0,0 +1 @@
++The inner pointer field `self.0' is not public, thus can only be accessed indirectly by its public functions. `ReadVolatile' provides `read' and returns a const pointer to T for `inner'. `WriteVolatile' provides `write' but returns a mutable pointer to T for `inner', which might allow reading the pointer in fact.
+\ No newline at end of file
+diff --git a/volatile/questions/macros b/volatile/questions/macros
+index e69de29..f60f83c 100644
+--- a/volatile/questions/macros
++++ b/volatile/questions/macros
+@@ -0,0 +1 @@
++These macros are helpers to help implement those trait for `Volatile'-s.
+\ No newline at end of file
+diff --git a/volatile/questions/pub-constructor b/volatile/questions/pub-constructor
+index e69de29..f65c214 100644
+--- a/volatile/questions/pub-constructor
++++ b/volatile/questions/pub-constructor
+@@ -0,0 +1 @@
++In this way, `self.0' can be accessed directly from the outside of the library, thus the safety implications can no longer hold.
+\ No newline at end of file
+diff --git a/volatile/questions/safety b/volatile/questions/safety
+index e69de29..935c167 100644
+--- a/volatile/questions/safety
++++ b/volatile/questions/safety
+@@ -0,0 +1 @@
++Because, `read' and `write' have no raw pointers in their function signature, yet `new' needs a raw pointer passed in.
+\ No newline at end of file
+diff --git a/volatile/questions/traits b/volatile/questions/traits
+index e69de29..3f75dff 100644
+--- a/volatile/questions/traits
++++ b/volatile/questions/traits
+@@ -0,0 +1 @@
++By using these traits, the default implementation included in these traits reuses much code and allow for cleaner implementation for `Volatile'-s. However, the `new' methods have to have different type signature for different semantics, so they cannot be put into a trait, but they still provide a similar interface. It eases using the library and prevents the library author from making errors.
+\ No newline at end of file
+diff --git a/volatile/questions/unique-volatile b/volatile/questions/unique-volatile
+index e69de29..ae3aa4c 100644
+--- a/volatile/questions/unique-volatile
++++ b/volatile/questions/unique-volatile
+@@ -0,0 +1 @@
++`UniqueVolatile' means no pointer aliasing i.e. only one `UniqueVolatile' corresponds to the underlying pointer, allowing it to be thread safe. On the other side, `Volatile' does not have this restriction.
+\ No newline at end of file
