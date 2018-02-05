@@ -286,7 +286,7 @@ index e0aa184..db60af2 100644
 +    spin_sleep_us(ms * 1000);
  }
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
-index 92b6159..ed35b66 100644
+index 92b6159..2cdfaa9 100644
 --- a/pi/src/uart.rs
 +++ b/pi/src/uart.rs
 @@ -24,6 +24,26 @@ enum LsrStatus {
@@ -378,7 +378,7 @@ index 92b6159..ed35b66 100644
 +            },
 +            Some(timeout) => {
 +                let old = timer::current_time();
-+                let deadline = old + timeout as u64;
++                let deadline = old + (timeout as u64) * 1000; // Internal clock unit is microsecond, but timeout unit is millisecond
 +                while deadline >= timer::current_time() {
 +                    if self.has_byte() {
 +                        return Ok(())
