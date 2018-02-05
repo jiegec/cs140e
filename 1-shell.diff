@@ -621,12 +621,24 @@ index e69de29..774e963 100644
 +++ b/questions/blinky-states
 @@ -0,0 +1 @@
 +START -> OUTPUT -> SET -> CLEAR -> SET -> CLEAR -> ...
+diff --git a/questions/drop-container b/questions/drop-container
+index e69de29..697b80a 100644
+--- a/questions/drop-container
++++ b/questions/drop-container
+@@ -0,0 +1 @@
++If multiple mutable references to a singleton exists, data race safety can no longer be guaranteed. By using a mutex, only one thread at a time can acquire the mutable reference.
 diff --git a/questions/fake-states b/questions/fake-states
 index e69de29..babd3c9 100644
 --- a/questions/fake-states
 +++ b/questions/fake-states
 @@ -0,0 +1 @@
 +If user faked a GPIO pin to state `Input', but the pin has not been initialized to allow input, it would disobey the hardware's spec.
+diff --git a/questions/write-fmt b/questions/write-fmt
+index e69de29..0d374e1 100644
+--- a/questions/write-fmt
++++ b/questions/write-fmt
+@@ -0,0 +1 @@
++`write_fmt' comes from the default implementation in trait `alloc::fmt::Write', which calls`write_str' to print the result into UART.
 diff --git a/stack-vec/questions/clone-for-pop b/stack-vec/questions/clone-for-pop
 index e69de29..8e6d930 100644
 --- a/stack-vec/questions/clone-for-pop
