@@ -1,8 +1,64 @@
+diff --git a/kernel/src/console.rs b/kernel/src/console.rs
+index 9a78db0..143a45d 100644
+--- a/kernel/src/console.rs
++++ b/kernel/src/console.rs
+@@ -19,35 +19,36 @@ impl Console {
+     /// Initializes the console if it's not already initialized.
+     #[inline]
+     fn initialize(&mut self) {
+-        unimplemented!()
++        self.inner.get_or_insert_with(&MiniUart::new);
+     }
+ 
+     /// Returns a mutable borrow to the inner `MiniUart`, initializing it as
+     /// needed.
+     fn inner(&mut self) -> &mut MiniUart {
+-        unimplemented!()
++        self.initialize();
++        self.inner.as_mut().unwrap()
+     }
+ 
+     /// Reads a byte from the UART device, blocking until a byte is available.
+     pub fn read_byte(&mut self) -> u8 {
+-        unimplemented!()
++        self.inner().read_byte()
+     }
+ 
+     /// Writes the byte `byte` to the UART device.
+     pub fn write_byte(&mut self, byte: u8) {
+-        unimplemented!()
++        self.inner().write_byte(byte)
+     }
+ }
+ 
+ impl io::Read for Console {
+     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+-        unimplemented!()
++        self.inner().read(buf)
+     }
+ }
+ 
+ impl io::Write for Console {
+     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+-        unimplemented!()
++        self.inner().write(buf)
+     }
+ 
+     fn flush(&mut self) -> io::Result<()> {
+@@ -57,7 +58,7 @@ impl io::Write for Console {
+ 
+ impl fmt::Write for Console {
+     fn write_str(&mut self, s: &str) -> fmt::Result {
+-        unimplemented!()
++        self.inner().write_str(s)
+     }
+ }
+ 
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index 9eacec9..ca585e5 100644
+index 9eacec9..f0171e5 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
-@@ -12,12 +12,40 @@
+@@ -12,12 +12,51 @@
  extern crate pi;
  extern crate stack_vec;
  
@@ -10,12 +66,15 @@ index 9eacec9..ca585e5 100644
 +use std::fmt::Write;
 +use pi::uart::MiniUart;
 +use pi::timer::spin_sleep_ms;
++use pi::timer::current_time;
 +
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
  pub mod shell;
  
++use console::kprintln;
++
 +fn blinky() {
 +    let mut pin16 = Gpio::new(16);
 +    let mut pin_out16 = pin16.into_output();
@@ -37,11 +96,19 @@ index 9eacec9..ca585e5 100644
 +    }
 +}
 +
++fn time() {
++    loop {
++        kprintln!("Current time: {}", current_time());
++        spin_sleep_ms(1000);
++    }
++}
++
  #[no_mangle]
  pub extern "C" fn kmain() {
      // FIXME: Start the shell.
 +    // blinky();
-+    echo();
++    // echo();
++    time();
  }
 diff --git a/pi/src/gpio.rs b/pi/src/gpio.rs
 index 92f4233..0ad6b96 100644
@@ -119,7 +186,7 @@ index e0aa184..db60af2 100644
 +    spin_sleep_us(ms * 1000);
  }
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
-index 92b6159..f0272f8 100644
+index 92b6159..ed35b66 100644
 --- a/pi/src/uart.rs
 +++ b/pi/src/uart.rs
 @@ -24,6 +24,26 @@ enum LsrStatus {
@@ -236,7 +303,7 @@ index 92b6159..f0272f8 100644
 +    fn write_str(&mut self, s: &str) -> fmt::Result {
 +        for byte in s.bytes() {
 +            match byte {
-+                b'\r' => {
++                b'\n' => {
 +                    self.write_byte(b'\r');
 +                    self.write_byte(b'\n');
 +                },
