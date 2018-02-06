@@ -645,6 +645,12 @@ index e69de29..5a5bb15 100644
 +++ b/questions/shell-lookback
 @@ -0,0 +1 @@
 +`StackVec' is extensively used for arrays, `Gpio' is used in `Uart' and `Console', and `Console' is used for printing to console.
+diff --git a/questions/small-kernels b/questions/small-kernels
+index e69de29..51abd9c 100644
+--- a/questions/small-kernels
++++ b/questions/small-kernels
+@@ -0,0 +1 @@
++`/System/Library/Kernels/kernel' is just 13MB in size. So 63.5MiB is really big enough.
 diff --git a/questions/write-fmt b/questions/write-fmt
 index e69de29..0d374e1 100644
 --- a/questions/write-fmt
@@ -988,38 +994,92 @@ index 2b860cc..d37d000 100644
 +    assert_eq!(stack_vec.as_slice(), &[6, 2, 3, 4, 5, 0]);
 +}
 diff --git a/ttywrite/src/main.rs b/ttywrite/src/main.rs
-index 08d89e8..eba3573 100644
+index 08d89e8..61b1ea5 100644
 --- a/ttywrite/src/main.rs
 +++ b/ttywrite/src/main.rs
-@@ -47,6 +47,10 @@ struct Opt {
-     raw: bool,
- }
+@@ -1,23 +1,25 @@
+ extern crate serial;
+ extern crate structopt;
++#[macro_use]
++extern crate structopt_derive;
+ extern crate xmodem;
+-#[macro_use] extern crate structopt_derive;
  
-+fn progress_fn(progress: Progress) {
-+    println!("Progress: {:?}", progress);
+ use std::path::PathBuf;
+ use std::time::Duration;
+ 
+ use structopt::StructOpt;
+-use serial::core::{CharSize, BaudRate, StopBits, FlowControl, SerialDevice, SerialPortSettings};
+-use xmodem::{Xmodem, Progress};
++use serial::core::{BaudRate, CharSize, FlowControl, SerialDevice, SerialPortSettings, StopBits};
++use xmodem::{Progress, Xmodem};
+ 
+ mod parsers;
+ 
+-use parsers::{parse_width, parse_stop_bits, parse_flow_control, parse_baud_rate};
++use parsers::{parse_baud_rate, parse_flow_control, parse_stop_bits, parse_width};
+ 
+ #[derive(StructOpt, Debug)]
+ #[structopt(about = "Write to TTY using the XMODEM protocol by default.")]
+ struct Opt {
+-    #[structopt(short = "i", help = "Input file (defaults to stdin if not set)", parse(from_os_str))]
++    #[structopt(short = "i", help = "Input file (defaults to stdin if not set)",
++                parse(from_os_str))]
+     input: Option<PathBuf>,
+ 
+     #[structopt(short = "b", long = "baud", parse(try_from_str = "parse_baud_rate"),
+@@ -32,8 +34,7 @@ struct Opt {
+                 help = "Set data character width in bits", default_value = "8")]
+     char_width: CharSize,
+ 
+-    #[structopt(help = "Path to TTY device", parse(from_os_str))]
+-    tty_path: PathBuf,
++    #[structopt(help = "Path to TTY device", parse(from_os_str))] tty_path: PathBuf,
+ 
+     #[structopt(short = "f", long = "flow-control", parse(try_from_str = "parse_flow_control"),
+                 help = "Enable flow control ('hardware' or 'software')", default_value = "none")]
+@@ -43,16 +44,63 @@ struct Opt {
+                 help = "Set number of stop bits", default_value = "1")]
+     stop_bits: StopBits,
+ 
+-    #[structopt(short = "r", long = "raw", help = "Disable XMODEM")]
+-    raw: bool,
++    #[structopt(short = "r", long = "raw", help = "Disable XMODEM")] raw: bool,
 +}
 +
++fn progress_fn(progress: Progress) {
++    println!("Progress: {:?}", progress);
+ }
+ 
  fn main() {
      use std::fs::File;
-     use std::io::{self, BufReader, BufRead};
-@@ -55,4 +59,36 @@ fn main() {
+-    use std::io::{self, BufReader, BufRead};
++    use std::io::{self, BufReader};
+ 
+     let opt = Opt::from_args();
      let mut serial = serial::open(&opt.tty_path).expect("path points to invalid TTY");
  
      // FIXME: Implement the `ttywrite` utility.
 +    let mut settings = serial.read_settings().expect("device should be valid");
-+    settings.set_baud_rate(opt.baud_rate).expect("baud rate should be valid");
++    settings
++        .set_baud_rate(opt.baud_rate)
++        .expect("baud rate should be valid");
 +    settings.set_stop_bits(opt.stop_bits);
 +    settings.set_flow_control(opt.flow_control);
 +    settings.set_char_size(opt.char_width);
-+    serial.write_settings(&settings).expect("settings should be valid");
-+    serial.set_timeout(Duration::new(opt.timeout, 0)).expect("timeout should be valid");
++    serial
++        .write_settings(&settings)
++        .expect("settings should be valid");
++    serial
++        .set_timeout(Duration::new(opt.timeout, 0))
++        .expect("timeout should be valid");
 +
 +    if opt.raw {
 +        match opt.input {
 +            Some(ref path) => {
-+                let mut input = File::open(path).expect("file should exist");
++                let mut input = BufReader::new(File::open(path).expect("file should exist"));
 +                io::copy(&mut input, &mut serial).expect("io transfer should succeed");
-+            },
++            }
 +            None => {
 +                let mut input = io::stdin();
 +                io::copy(&mut input, &mut serial).expect("io transfer should succeed");
@@ -1029,14 +1089,20 @@ index 08d89e8..eba3573 100644
 +        // XMODEM
 +        match opt.input {
 +            Some(ref path) => {
-+                let mut input = File::open(path).expect("file should exist");
-+                Xmodem::transmit_with_progress(input, serial, progress_fn).expect("xmodem transfer should succeed");
-+            },
++                let mut input = BufReader::new(File::open(path).expect("file should exist"));
++                match Xmodem::transmit_with_progress(input, &mut serial, progress_fn) {
++                    Ok(_) => return,
++                    Err(err) => println!("Progress: {:?}", err),
++                }
++            }
 +            None => {
 +                let mut input = io::stdin();
-+                Xmodem::transmit_with_progress(input, serial, progress_fn).expect("xmodem transfer should succeed");
++                match Xmodem::transmit_with_progress(input, &mut serial, progress_fn) {
++                    Ok(_) => return,
++                    Err(err) => println!("Progress: {:?}", err),
++                }
 +            }
-+        };
++        }
 +    }
  }
 diff --git a/ttywrite/test.sh b/ttywrite/test.sh
@@ -1098,7 +1164,7 @@ index e69de29..ae3aa4c 100644
 +`UniqueVolatile' means no pointer aliasing i.e. only one `UniqueVolatile' corresponds to the underlying pointer, allowing it to be thread safe. On the other side, `Volatile' does not have this restriction.
 \ No newline at end of file
 diff --git a/xmodem/src/lib.rs b/xmodem/src/lib.rs
-index c6ce954..a92c939 100644
+index c6ce954..b835593 100644
 --- a/xmodem/src/lib.rs
 +++ b/xmodem/src/lib.rs
 @@ -173,7 +173,18 @@ impl<T: io::Read + io::Write> Xmodem<T> {
@@ -1116,7 +1182,7 @@ index c6ce954..a92c939 100644
 +                Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN"))
 +            } else {
 +                Err(io::Error::new(io::ErrorKind::InvalidData, msg))
-+            }
++    }
 +        }
      }
  
@@ -1135,7 +1201,7 @@ index c6ce954..a92c939 100644
 +                Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN"))
 +            } else {
 +                Err(io::Error::new(io::ErrorKind::InvalidData, expected))
-+            }
++    }
 +        }
      }
  

@@ -1,5 +1,55 @@
+diff --git a/bootloader/src/kmain.rs b/bootloader/src/kmain.rs
+index 591a219..59e3ebc 100644
+--- a/bootloader/src/kmain.rs
++++ b/bootloader/src/kmain.rs
+@@ -1,7 +1,11 @@
+ #![feature(asm, lang_items)]
+ 
+-extern crate xmodem;
+ extern crate pi;
++extern crate xmodem;
++
++use std::io;
++use std::io::Write;
++use pi::uart::MiniUart;
+ 
+ pub mod lang_items;
+ 
+@@ -19,11 +23,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
+ fn jump_to(addr: *mut u8) -> ! {
+     unsafe {
+         asm!("br $0" : : "r"(addr as usize));
+-        loop { asm!("nop" :::: "volatile")  }
++        loop {
++            asm!("nop" :::: "volatile")
++        }
+     }
+ }
+ 
+ #[no_mangle]
+ pub extern "C" fn kmain() {
+     // FIXME: Implement the bootloader.
++    let mut uart = MiniUart::new();
++    uart.set_read_timeout(750);
++
++    loop {
++        let dest = unsafe { std::slice::from_raw_parts_mut(BINARY_START, MAX_BINARY_SIZE) };
++        match xmodem::Xmodem::receive(&mut uart, io::Cursor::new(dest)) {
++            Ok(_) => {
++                // Succeed
++                jump_to(BINARY_START)
++            }
++            Err(err) => match err.kind() {
++                io::ErrorKind::TimedOut => continue,
++                io::ErrorKind::InvalidData => continue, // might receive 0x00 when no input
++                _ => uart.write_fmt(format_args!("Error: {:?}\r\n", err))
++                    .unwrap(),
++            },
++        }
++    }
+ }
 diff --git a/kernel/src/console.rs b/kernel/src/console.rs
-index 9a78db0..f131773 100644
+index 557772e..f131773 100644
 --- a/kernel/src/console.rs
 +++ b/kernel/src/console.rs
 @@ -19,35 +19,36 @@ impl Console {
@@ -54,15 +104,6 @@ index 9a78db0..f131773 100644
      }
  }
  
-@@ -74,7 +75,7 @@ pub fn _print(args: fmt::Arguments) {
- 
- /// Like `println!`, but for kernel-space.
- pub macro kprintln {
--    () => (print!("\n")),
-+    () => (kprint!("\n")),
-     ($fmt:expr) => (kprint!(concat!($fmt, "\n"))),
-     ($fmt:expr, $($arg:tt)*) => (kprint!(concat!($fmt, "\n"), $($arg)*))
- }
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
 index 9eacec9..d22fa53 100644
 --- a/kernel/src/kmain.rs
@@ -349,6 +390,18 @@ index 92f4233..0ad6b96 100644
 +        self.registers.LEV[(self.pin / 32) as usize].has_mask(1 << (self.pin % 32))
      }
  }
+diff --git a/pi/src/lib.rs b/pi/src/lib.rs
+index c30b1c2..48fccf8 100644
+--- a/pi/src/lib.rs
++++ b/pi/src/lib.rs
+@@ -2,7 +2,6 @@
+ #![feature(const_fn)]
+ #![feature(asm)]
+ #![feature(decl_macro)]
+-#![feature(repr_align)]
+ #![feature(attr_literals)]
+ #![feature(never_type)]
+ 
 diff --git a/pi/src/timer.rs b/pi/src/timer.rs
 index e0aa184..db60af2 100644
 --- a/pi/src/timer.rs
@@ -388,7 +441,7 @@ index e0aa184..db60af2 100644
 +    spin_sleep_us(ms * 1000);
  }
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
-index 92b6159..2cdfaa9 100644
+index 92b6159..4d00b59 100644
 --- a/pi/src/uart.rs
 +++ b/pi/src/uart.rs
 @@ -24,6 +24,26 @@ enum LsrStatus {
@@ -518,7 +571,7 @@ index 92b6159..2cdfaa9 100644
  
  #[cfg(feature = "std")]
  mod uart_io {
-@@ -104,4 +171,33 @@ mod uart_io {
+@@ -104,4 +171,34 @@ mod uart_io {
      //
      // The `io::Write::write()` method must write all of the requested bytes
      // before returning.
@@ -526,9 +579,10 @@ index 92b6159..2cdfaa9 100644
 +       fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
 +           match self.wait_for_byte() {
 +               Ok(()) => {
-+                   let index = 0;
++                   let mut index = 0;
 +                   while self.has_byte() && index < buf.len() {
-+                       buf[index] = self.read_byte()
++                       buf[index] = self.read_byte();
++                       index += 1;
 +                   }
 +                   Ok(index)
 +               },
