@@ -1006,7 +1006,7 @@ index 2b860cc..d37d000 100644
 +    assert_eq!(stack_vec.as_slice(), &[6, 2, 3, 4, 5, 0]);
 +}
 diff --git a/ttywrite/src/main.rs b/ttywrite/src/main.rs
-index 08d89e8..61b1ea5 100644
+index 08d89e8..0fdc777 100644
 --- a/ttywrite/src/main.rs
 +++ b/ttywrite/src/main.rs
 @@ -1,23 +1,25 @@
@@ -1104,14 +1104,14 @@ index 08d89e8..61b1ea5 100644
 +                let mut input = BufReader::new(File::open(path).expect("file should exist"));
 +                match Xmodem::transmit_with_progress(input, &mut serial, progress_fn) {
 +                    Ok(_) => return,
-+                    Err(err) => println!("Progress: {:?}", err),
++                    Err(err) => panic!("Error: {:?}", err),
 +                }
 +            }
 +            None => {
 +                let mut input = io::stdin();
 +                match Xmodem::transmit_with_progress(input, &mut serial, progress_fn) {
 +                    Ok(_) => return,
-+                    Err(err) => println!("Progress: {:?}", err),
++                    Err(err) => panic!("Error: {:?}", err),
 +                }
 +            }
 +        }

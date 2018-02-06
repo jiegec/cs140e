@@ -179,13 +179,14 @@ index 9eacec9..d22fa53 100644
 +    shell::shell("> ");
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..309d991 100644
+index 03fb8fb..64754bf 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,24 @@
+@@ -1,16 +1,39 @@
  use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::str;
++use pi::timer::{spin_sleep_ms, current_time};
  
  /// Error type for `Command` parse failures.
  #[derive(Debug)]
@@ -202,6 +203,20 @@ index 03fb8fb..309d991 100644
 +const ESC: u8 = 0x1bu8;
 +const DEL: u8 = 0x7fu8;
 +
++const BANNER: &str = r#"
++                 _ _ ___         
++             __-         `-_    
++         ___/__        〇   \ 
++     - '     _/             /
++   '_'             /
++ / _- ---            __ -
++/`     |          _ / \  \
++       |       -       \ |
++        \    /          V
++          \  |
++            \ \
++              \"#;
++
  /// A structure representing a single shell command.
  struct Command<'a> {
 -    args: StackVec<'a, &'a str>
@@ -209,7 +224,7 @@ index 03fb8fb..309d991 100644
  }
  
  impl<'a> Command<'a> {
-@@ -36,12 +44,141 @@ impl<'a> Command<'a> {
+@@ -36,12 +59,166 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -222,6 +237,9 @@ index 03fb8fb..309d991 100644
  /// never returns: it is perpetually in a shell loop.
  pub fn shell(prefix: &str) -> ! {
 -    unimplemented!()
++    spin_sleep_ms(500); // wait for client to attach
++    kprintln!("{}", BANNER);
++
 +    let mut buffer = [0u8; 512];
 +    let mut line_vec = StackVec::new(&mut buffer);
 +    loop {
@@ -236,6 +254,8 @@ index 03fb8fb..309d991 100644
 +                let path = command.path();
 +                match path {
 +                    "echo" => echo(&command),
++                    "uptime" => uptime(&command),
++                    "exit" => exit(&command),
 +                    _ => kprintln!("unknown command: {}", path),
 +                }
 +            }
@@ -247,7 +267,7 @@ index 03fb8fb..309d991 100644
 +            }
 +        }
 +    }
-+}
+ }
 +
 +fn read_line<'a>(line_vec: &'a mut StackVec<u8>) -> &'a str {
 +    let mut console = CONSOLE.lock();
@@ -352,7 +372,28 @@ index 03fb8fb..309d991 100644
 +        kprint!(" {}", *arg);
 +    }
 +    kprintln!();
- }
++}
++
++fn uptime(_command: &Command) {
++    let time = current_time();
++    let sec = time / 1000 / 1000;
++    let min = sec / 60;
++    let hour = min / 60;
++    let day = hour / 24;
++    kprintln!("Uptime: {} day(s), {:02}:{:02}:{:02}", day, hour % 24, min % 60, sec % 60);
++}
++
++fn exit(_command: &Command) -> ! {
++    // in line with bootloader
++    const BOOTLOADER_START_ADDR: usize = 0x4000000;
++    unsafe {
++        asm!("br $0" : : "r"(BOOTLOADER_START_ADDR));
++        loop {
++            asm!("nop" :::: "volatile")
++        }
++    }
++}
+\ No newline at end of file
 diff --git a/pi/src/gpio.rs b/pi/src/gpio.rs
 index 92f4233..0ad6b96 100644
 --- a/pi/src/gpio.rs
