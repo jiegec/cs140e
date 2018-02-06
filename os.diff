@@ -1,5 +1,5 @@
 diff --git a/kernel/src/console.rs b/kernel/src/console.rs
-index 9a78db0..143a45d 100644
+index 9a78db0..f131773 100644
 --- a/kernel/src/console.rs
 +++ b/kernel/src/console.rs
 @@ -19,35 +19,36 @@ impl Console {
@@ -54,11 +54,28 @@ index 9a78db0..143a45d 100644
      }
  }
  
+@@ -74,7 +75,7 @@ pub fn _print(args: fmt::Arguments) {
+ 
+ /// Like `println!`, but for kernel-space.
+ pub macro kprintln {
+-    () => (print!("\n")),
++    () => (kprint!("\n")),
+     ($fmt:expr) => (kprint!(concat!($fmt, "\n"))),
+     ($fmt:expr, $($arg:tt)*) => (kprint!(concat!($fmt, "\n"), $($arg)*))
+ }
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index 9eacec9..483e984 100644
+index 9eacec9..d22fa53 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
-@@ -12,12 +12,61 @@
+@@ -4,7 +4,6 @@
+ #![feature(asm)]
+ #![feature(optin_builtin_traits)]
+ #![feature(decl_macro)]
+-#![feature(repr_align)]
+ #![feature(attr_literals)]
+ #![feature(never_type)]
+ #![feature(ptr_internals)]
+@@ -12,12 +11,61 @@
  extern crate pi;
  extern crate stack_vec;
  
@@ -73,10 +90,10 @@ index 9eacec9..483e984 100644
  pub mod console;
  pub mod shell;
  
-+use console::{kprintln, kprint, CONSOLE};
++use console::{kprintln, CONSOLE};
 +
 +fn blinky() {
-+    let mut pin16 = Gpio::new(16);
++    let pin16 = Gpio::new(16);
 +    let mut pin_out16 = pin16.into_output();
 +
 +    loop {
@@ -121,7 +138,7 @@ index 9eacec9..483e984 100644
 +    shell::shell("> ");
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..9a00c7c 100644
+index 03fb8fb..309d991 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,24 @@
@@ -151,7 +168,7 @@ index 03fb8fb..9a00c7c 100644
  }
  
  impl<'a> Command<'a> {
-@@ -36,12 +44,111 @@ impl<'a> Command<'a> {
+@@ -36,12 +44,141 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -165,12 +182,29 @@ index 03fb8fb..9a00c7c 100644
  pub fn shell(prefix: &str) -> ! {
 -    unimplemented!()
 +    let mut buffer = [0u8; 512];
++    let mut line_vec = StackVec::new(&mut buffer);
 +    loop {
++        let mut args_buf = [""; 64];
 +        kprint!("{}", prefix);
 +
-+        let mut line_vec = StackVec::with_len(&mut buffer, 0);
++        line_vec.truncate(0);
 +        let line = read_line(&mut line_vec);
-+        kprintln!("{}", line);
++
++        match Command::parse(line, &mut args_buf) {
++            Ok(command) => {
++                let path = command.path();
++                match path {
++                    "echo" => echo(&command),
++                    _ => kprintln!("unknown command: {}", path),
++                }
++            }
++            Err(Error::Empty) => {
++                // Ignore
++            }
++            Err(Error::TooManyArgs) => {
++                kprintln!("error: too many arguments");
++            }
++        }
 +    }
 +}
 +
@@ -190,7 +224,7 @@ index 03fb8fb..9a00c7c 100644
 +                        console.write_byte(*byte);
 +                    }
 +                    console.write_byte(b' ');
-+                    for i in cursor..line_vec.len() {
++                    for _i in cursor..line_vec.len() {
 +                        console.write_byte(BS);
 +                    }
 +                    console.write_byte(BS);
@@ -230,12 +264,12 @@ index 03fb8fb..9a00c7c 100644
 +                                    console.write_byte(BEL);
 +                                }
 +                            }
-+                            byte => {
++                            _ => {
 +                                console.write_byte(BEL);
 +                            }
 +                        }
 +                    }
-+                    byte => {
++                    _ => {
 +                        console.write_byte(BEL);
 +                    }
 +                }
@@ -247,14 +281,16 @@ index 03fb8fb..9a00c7c 100644
 +                            console.write_byte(*byte);
 +                        }
 +                        cursor += 1;
-+                        for i in cursor..line_vec.len() {
++                        for _i in cursor..line_vec.len() {
 +                            console.write_byte(BS);
 +                        }
 +                    }
 +                    Err(()) => {
++                        // buffer full
++                        // might need better message?
 +                        console.write_byte(BEL);
 +                    }
-+                } 
++                }
 +            }
 +            _ => {
 +                // unrecognized characters
@@ -264,6 +300,17 @@ index 03fb8fb..9a00c7c 100644
 +    }
 +
 +    str::from_utf8(line_vec.as_slice()).unwrap_or_default()
++}
++
++fn echo(command: &Command) {
++    if command.args.len() > 1 {
++        kprint!("{}", command.args[1]);
++    }
++
++    for arg in &command.args[2..] {
++        kprint!(" {}", *arg);
++    }
++    kprintln!();
  }
 diff --git a/pi/src/gpio.rs b/pi/src/gpio.rs
 index 92f4233..0ad6b96 100644

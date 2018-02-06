@@ -633,6 +633,18 @@ index e69de29..babd3c9 100644
 +++ b/questions/fake-states
 @@ -0,0 +1 @@
 +If user faked a GPIO pin to state `Input', but the pin has not been initialized to allow input, it would disobey the hardware's spec.
+diff --git a/questions/led-pattern b/questions/led-pattern
+index e69de29..0d27c5d 100644
+--- a/questions/led-pattern
++++ b/questions/led-pattern
+@@ -0,0 +1 @@
++Sorry, no idea ;)
+diff --git a/questions/shell-lookback b/questions/shell-lookback
+index e69de29..5a5bb15 100644
+--- a/questions/shell-lookback
++++ b/questions/shell-lookback
+@@ -0,0 +1 @@
++`StackVec' is extensively used for arrays, `Gpio' is used in `Uart' and `Console', and `Console' is used for printing to console.
 diff --git a/questions/write-fmt b/questions/write-fmt
 index e69de29..0d374e1 100644
 --- a/questions/write-fmt
