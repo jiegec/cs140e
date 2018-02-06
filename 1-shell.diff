@@ -621,6 +621,12 @@ index e69de29..774e963 100644
 +++ b/questions/blinky-states
 @@ -0,0 +1 @@
 +START -> OUTPUT -> SET -> CLEAR -> SET -> CLEAR -> ...
+diff --git a/questions/bootloader-timeout b/questions/bootloader-timeout
+index e69de29..a8a4db2 100644
+--- a/questions/bootloader-timeout
++++ b/questions/bootloader-timeout
+@@ -0,0 +1 @@
++If timeout is not specified, the `NAK' sent from receiver may not arrive at the sender, so the sender has to wait for another `NAK' indefinitely, yet the bootloader will only send `NAK' again on timeout.
 diff --git a/questions/drop-container b/questions/drop-container
 index e69de29..697b80a 100644
 --- a/questions/drop-container
@@ -639,6 +645,12 @@ index e69de29..0d27c5d 100644
 +++ b/questions/led-pattern
 @@ -0,0 +1 @@
 +Sorry, no idea ;)
+diff --git a/questions/restricted-reads b/questions/restricted-reads
+index e69de29..c956d13 100644
+--- a/questions/restricted-reads
++++ b/questions/restricted-reads
+@@ -0,0 +1 @@
++By using `ReadVolatile', writing to them is forbidden.
 diff --git a/questions/shell-lookback b/questions/shell-lookback
 index e69de29..5a5bb15 100644
 --- a/questions/shell-lookback
