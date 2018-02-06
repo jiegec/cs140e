@@ -121,10 +121,10 @@ index 9eacec9..483e984 100644
 +    shell::shell("> ");
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..117e1bd 100644
+index 03fb8fb..9a00c7c 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,23 @@
+@@ -1,16 +1,24 @@
  use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::str;
@@ -139,8 +139,9 @@ index 03fb8fb..117e1bd 100644
  
 +const BEL: u8 = 0x07u8;
 +const BS: u8 = 0x08u8;
-+const CR: u8 = 0x0du8;
 +const LF: u8 = 0x0au8;
++const CR: u8 = 0x0du8;
++const ESC: u8 = 0x1bu8;
 +const DEL: u8 = 0x7fu8;
 +
  /// A structure representing a single shell command.
@@ -150,7 +151,7 @@ index 03fb8fb..117e1bd 100644
  }
  
  impl<'a> Command<'a> {
-@@ -36,12 +43,57 @@ impl<'a> Command<'a> {
+@@ -36,12 +44,111 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -175,31 +176,85 @@ index 03fb8fb..117e1bd 100644
 +
 +fn read_line<'a>(line_vec: &'a mut StackVec<u8>) -> &'a str {
 +    let mut console = CONSOLE.lock();
++    let mut cursor = 0;
 +    loop {
 +        match console.read_byte() {
 +            BS | DEL => {
 +                // Backspace
-+                match line_vec.pop() {
-+                    Some(_) => {
-+                        console.write_byte(BS);
-+                        console.write_byte(b' ');
++                if cursor > 0 {
++                    cursor -= 1;
++                    line_vec.remove(cursor);
++
++                    console.write_byte(BS);
++                    for byte in &line_vec[cursor..] {
++                        console.write_byte(*byte);
++                    }
++                    console.write_byte(b' ');
++                    for i in cursor..line_vec.len() {
 +                        console.write_byte(BS);
 +                    }
-+                    None => {
-+                        console.write_byte(BEL);
-+                    }
++                    console.write_byte(BS);
++                } else {
++                    console.write_byte(BEL);
 +                }
 +            }
 +            CR | LF => {
++                // Return
 +                console.write_byte(CR);
 +                console.write_byte(LF);
 +                break;
 +            }
++            ESC => {
++                match console.read_byte() {
++                    b'[' => {
++                        match console.read_byte() {
++                            b'D' => {
++                                // Left arrow
++                                if cursor > 0 {
++                                    cursor -= 1;
++                                    console.write_byte(ESC);
++                                    console.write_byte(b'[');
++                                    console.write_byte(b'D');
++                                } else {
++                                    console.write_byte(BEL);
++                                }
++                            }
++                            b'C' => {
++                                // Right arrow
++                                if cursor < line_vec.len() {
++                                    cursor += 1;
++                                    console.write_byte(ESC);
++                                    console.write_byte(b'[');
++                                    console.write_byte(b'C');
++                                } else {
++                                    console.write_byte(BEL);
++                                }
++                            }
++                            byte => {
++                                console.write_byte(BEL);
++                            }
++                        }
++                    }
++                    byte => {
++                        console.write_byte(BEL);
++                    }
++                }
++            }
 +            byte if byte.is_ascii() => {
-+                console.write_byte(byte);
-+                line_vec
-+                    .push(byte)
-+                    .expect("commands can have 512 bytes at most");
++                match line_vec.insert(cursor, byte) {
++                    Ok(()) => {
++                        for byte in &line_vec[cursor..] {
++                            console.write_byte(*byte);
++                        }
++                        cursor += 1;
++                        for i in cursor..line_vec.len() {
++                            console.write_byte(BS);
++                        }
++                    }
++                    Err(()) => {
++                        console.write_byte(BEL);
++                    }
++                } 
 +            }
 +            _ => {
 +                // unrecognized characters
@@ -207,7 +262,7 @@ index 03fb8fb..117e1bd 100644
 +            }
 +        }
 +    }
-+    
++
 +    str::from_utf8(line_vec.as_slice()).unwrap_or_default()
  }
 diff --git a/pi/src/gpio.rs b/pi/src/gpio.rs

@@ -670,7 +670,7 @@ index e69de29..41bdbb2 100644
 +Because `StackVec' uses a fixed stack memory for storing its items, but `Vec' expands its allocated memory region when necessary.
 \ No newline at end of file
 diff --git a/stack-vec/src/lib.rs b/stack-vec/src/lib.rs
-index bbec5aa..fbf57a8 100644
+index bbec5aa..d364ed6 100644
 --- a/stack-vec/src/lib.rs
 +++ b/stack-vec/src/lib.rs
 @@ -4,6 +4,8 @@
@@ -789,7 +789,7 @@ index bbec5aa..fbf57a8 100644
      }
  }
  
-@@ -99,9 +118,130 @@ impl<'a, T: Clone + 'a> StackVec<'a, T> {
+@@ -99,9 +118,161 @@ impl<'a, T: Clone + 'a> StackVec<'a, T> {
      /// If this vector is not empty, removes the last element from this vector
      /// by cloning it and returns it. Otherwise returns `None`.
      pub fn pop(&mut self) -> Option<T> {
@@ -921,6 +921,60 @@ index bbec5aa..fbf57a8 100644
 +    }
 +}
 +*/
++
++// My helper functions
++impl<'a, T: Clone> StackVec<'a, T> {
++    pub fn remove(&mut self, index: usize) -> T {
++        if index >= self.len {
++            panic!("index out of bound")
++        }
++
++        let item = self.storage[index].clone();
++        self.len -= 1;
++
++        for i in index..self.len {
++            self.storage[i] = self.storage[i+1].clone();
++        }
++
++        item
++    }
++
++    pub fn insert(&mut self, index: usize, element: T) -> Result<(), ()> {
++        if self.len == self.storage.len() || index > self.len() {
++            Err(())
++        } else {
++            for i in (index..self.len).rev() {
++                self.storage[i+1] = self.storage[i].clone()
++            }
++            self.storage[index] = element;
++            self.len += 1;
++            Ok(())
++        }
++    }
++}
+diff --git a/stack-vec/src/tests.rs b/stack-vec/src/tests.rs
+index 2b860cc..d37d000 100644
+--- a/stack-vec/src/tests.rs
++++ b/stack-vec/src/tests.rs
+@@ -202,3 +202,18 @@ fn as_slice() {
+     assert_eq!(stack_vec.as_slice(), &[102]);
+     assert_eq!(stack_vec.as_mut_slice(), &mut [102]);
+ }
++
++#[test] 
++fn remove_insert() {
++    let mut storage = [0, 1, 2, 3, 4, 5];
++    let mut stack_vec = StackVec::with_len(&mut storage, 6);
++    stack_vec.remove(0);
++    assert_eq!(stack_vec.as_slice(), &[1, 2, 3, 4, 5]);
++    stack_vec.insert(0, 6).expect("cap 6");
++    assert_eq!(stack_vec.as_slice(), &[6, 1, 2, 3, 4, 5]);
++    assert!(stack_vec.insert(2, 0).is_err());
++    stack_vec.remove(1);
++    assert_eq!(stack_vec.as_slice(), &[6, 2, 3, 4, 5]);
++    stack_vec.insert(5, 0).expect("cap 6");
++    assert_eq!(stack_vec.as_slice(), &[6, 2, 3, 4, 5, 0]);
++}
 diff --git a/ttywrite/src/main.rs b/ttywrite/src/main.rs
 index 08d89e8..eba3573 100644
 --- a/ttywrite/src/main.rs
