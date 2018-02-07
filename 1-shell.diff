@@ -1176,10 +1176,112 @@ index e69de29..ae3aa4c 100644
 +`UniqueVolatile' means no pointer aliasing i.e. only one `UniqueVolatile' corresponds to the underlying pointer, allowing it to be thread safe. On the other side, `Volatile' does not have this restriction.
 \ No newline at end of file
 diff --git a/xmodem/src/lib.rs b/xmodem/src/lib.rs
-index c6ce954..b835593 100644
+index c6ce954..b42f885 100644
 --- a/xmodem/src/lib.rs
 +++ b/xmodem/src/lib.rs
-@@ -173,7 +173,18 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -1,6 +1,7 @@
+ use std::io;
+ 
+-#[cfg(test)] mod tests;
++#[cfg(test)]
++mod tests;
+ mod read_ext;
+ mod progress;
+ 
+@@ -19,7 +20,7 @@ pub struct Xmodem<R> {
+     packet: u8,
+     inner: R,
+     started: bool,
+-    progress: ProgressFn
++    progress: ProgressFn,
+ }
+ 
+ impl Xmodem<()> {
+@@ -30,7 +31,9 @@ impl Xmodem<()> {
+     /// Returns the number of bytes written to `to`, excluding padding zeroes.
+     #[inline]
+     pub fn transmit<R, W>(data: R, to: W) -> io::Result<usize>
+-        where W: io::Read + io::Write, R: io::Read
++    where
++        W: io::Read + io::Write,
++        R: io::Read,
+     {
+         Xmodem::transmit_with_progress(data, to, progress::noop)
+     }
+@@ -44,7 +47,9 @@ impl Xmodem<()> {
+     ///
+     /// Returns the number of bytes written to `to`, excluding padding zeroes.
+     pub fn transmit_with_progress<R, W>(mut data: R, to: W, f: ProgressFn) -> io::Result<usize>
+-        where W: io::Read + io::Write, R: io::Read
++    where
++        W: io::Read + io::Write,
++        R: io::Read,
+     {
+         let mut transmitter = Xmodem::new_with_progress(to, f);
+         let mut packet = [0u8; 128];
+@@ -77,7 +82,9 @@ impl Xmodem<()> {
+     /// `into`. Returns the number of bytes read from `from`, a multiple of 128.
+     #[inline]
+     pub fn receive<R, W>(from: R, into: W) -> io::Result<usize>
+-       where R: io::Read + io::Write, W: io::Write
++    where
++        R: io::Read + io::Write,
++        W: io::Write,
+     {
+         Xmodem::receive_with_progress(from, into, progress::noop)
+     }
+@@ -88,7 +95,9 @@ impl Xmodem<()> {
+     /// The function `f` is used as a callback to indicate progress throughout
+     /// the reception. See the [`Progress`] enum for more information.
+     pub fn receive_with_progress<R, W>(from: R, mut into: W, f: ProgressFn) -> io::Result<usize>
+-       where R: io::Read + io::Write, W: io::Write
++    where
++        R: io::Read + io::Write,
++        W: io::Write,
+     {
+         let mut receiver = Xmodem::new_with_progress(from, f);
+         let mut packet = [0u8; 128];
+@@ -119,7 +128,12 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+     /// `inner`. The returned instance can be used for both receiving
+     /// (downloading) and sending (uploading).
+     pub fn new(inner: T) -> Self {
+-        Xmodem { packet: 1, started: false, inner, progress: progress::noop}
++        Xmodem {
++            packet: 1,
++            started: false,
++            inner,
++            progress: progress::noop,
++        }
+     }
+ 
+     /// Returns a new `Xmodem` instance with the internal reader/writer set to
+@@ -128,7 +142,12 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+     /// callback to indicate progress throughout the transfer. See the
+     /// [`Progress`] enum for more information.
+     pub fn new_with_progress(inner: T, f: ProgressFn) -> Self {
+-        Xmodem { packet: 1, started: false, inner, progress: f }
++        Xmodem {
++            packet: 1,
++            started: false,
++            inner,
++            progress: f,
++        }
+     }
+ 
+     /// Reads a single byte from the inner I/O stream. If `abort_on_can` is
+@@ -145,7 +164,10 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+ 
+         let byte = buf[0];
+         if abort_on_can && byte == CAN {
+-            return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN"));
++            return Err(io::Error::new(
++                io::ErrorKind::ConnectionAborted,
++                "received CAN",
++            ));
+         }
+ 
+         Ok(byte)
+@@ -173,7 +195,21 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      /// byte was not `byte`, if the read byte was `CAN` and `byte` is not `CAN`,
      /// or if writing the `CAN` byte failed on byte mismatch.
      fn expect_byte_or_cancel(&mut self, byte: u8, msg: &'static str) -> io::Result<u8> {
@@ -1191,15 +1293,18 @@ index c6ce954..b835593 100644
 +        } else {
 +            self.write_byte(CAN)?;
 +            if byte_in == CAN {
-+                Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN"))
++                Err(io::Error::new(
++                    io::ErrorKind::ConnectionAborted,
++                    "received CAN",
++                ))
 +            } else {
 +                Err(io::Error::new(io::ErrorKind::InvalidData, msg))
-+    }
++            }
 +        }
      }
  
      /// Reads a single byte from the inner I/O stream and compares it to `byte`.
-@@ -188,7 +199,17 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -188,7 +224,20 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      /// of `ConnectionAborted` is returned. Otherwise, the error kind is
      /// `InvalidData`.
      fn expect_byte(&mut self, byte: u8, expected: &'static str) -> io::Result<u8> {
@@ -1210,21 +1315,27 @@ index c6ce954..b835593 100644
 +            Ok(byte)
 +        } else {
 +            if byte_in == CAN {
-+                Err(io::Error::new(io::ErrorKind::ConnectionAborted, "received CAN"))
++                Err(io::Error::new(
++                    io::ErrorKind::ConnectionAborted,
++                    "received CAN",
++                ))
 +            } else {
 +                Err(io::Error::new(io::ErrorKind::InvalidData, expected))
-+    }
++            }
 +        }
      }
  
      /// Reads (downloads) a single packet from the inner stream using the XMODEM
-@@ -215,7 +236,48 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -215,7 +264,57 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      ///
      /// An error of kind `UnexpectedEof` is returned if `buf.len() < 128`.
      pub fn read_packet(&mut self, buf: &mut [u8]) -> io::Result<usize> {
 -        unimplemented!()
 +        if buf.len() < 128 {
-+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "buf.len() should not be less than 129"))
++            return Err(io::Error::new(
++                io::ErrorKind::UnexpectedEof,
++                "buf.len() should not be less than 129",
++            ));
 +        }
 +
 +        if self.started == false {
@@ -1240,7 +1351,7 @@ index c6ce954..b835593 100644
 +                self.write_byte(ACK)?;
 +                self.started = false;
 +                Ok(0)
-+            },
++            }
 +            SOH => {
 +                let packet = self.packet;
 +                self.expect_byte_or_cancel(packet, "packet number wrong")?;
@@ -1254,7 +1365,10 @@ index c6ce954..b835593 100644
 +
 +                if self.read_byte(false)? != checksum {
 +                    self.write_byte(NAK)?;
-+                    Err(io::Error::new(io::ErrorKind::Interrupted, "packet data checksum failed"))
++                    Err(io::Error::new(
++                        io::ErrorKind::Interrupted,
++                        "packet data checksum failed",
++                    ))
 +                } else {
 +                    self.write_byte(ACK)?;
 +
@@ -1263,18 +1377,24 @@ index c6ce954..b835593 100644
 +                    Ok(128)
 +                }
 +            }
-+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "expected SOH or EOT"))
++            _ => Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                "expected SOH or EOT",
++            )),
 +        }
      }
  
      /// Sends (uploads) a single packet to the inner stream using the XMODEM
-@@ -249,7 +311,49 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -249,7 +348,57 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      ///
      /// An error of kind `Interrupted` is returned if a packet checksum fails.
      pub fn write_packet(&mut self, buf: &[u8]) -> io::Result<usize> {
 -        unimplemented!()
 +        if buf.len() < 128 && buf.len() != 0 {
-+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "buf.len() should not be less than 128"));
++            return Err(io::Error::new(
++                io::ErrorKind::UnexpectedEof,
++                "buf.len() should not be less than 128",
++            ));
 +        }
 +
 +        if !self.started {
@@ -1311,11 +1431,120 @@ index c6ce954..b835593 100644
 +                (self.progress)(Progress::Packet(self.packet));
 +                self.packet = self.packet.wrapping_add(1);
 +                Ok(buf.len())
-+            },
-+            NAK => Err(io::Error::new(io::ErrorKind::Interrupted, "data corrupted from receiver")),
-+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "expected ACK or NAK"))
++            }
++            NAK => Err(io::Error::new(
++                io::ErrorKind::Interrupted,
++                "data corrupted from receiver",
++            )),
++            _ => Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                "expected ACK or NAK",
++            )),
 +        }
-+
      }
  
      /// Flush this output stream, ensuring that all intermediately buffered
+diff --git a/xmodem/src/tests.rs b/xmodem/src/tests.rs
+index 5857c09..e497be4 100644
+--- a/xmodem/src/tests.rs
++++ b/xmodem/src/tests.rs
+@@ -1,5 +1,5 @@
+ use super::*;
+-use std::sync::mpsc::{Receiver, Sender, channel};
++use std::sync::mpsc::{channel, Receiver, Sender};
+ use std::io::Cursor;
+ 
+ struct Pipe(Sender<u8>, Receiver<u8>, Vec<u8>);
+@@ -14,7 +14,7 @@ impl io::Read for Pipe {
+         for i in 0..buf.len() {
+             match self.1.recv() {
+                 Ok(byte) => buf[i] = byte,
+-                Err(_) => return Ok(i)
++                Err(_) => return Ok(i),
+             }
+         }
+ 
+@@ -54,7 +54,10 @@ fn test_loop() {
+         Xmodem::receive(tx, &mut output[..]).map(|_| output)
+     });
+ 
+-    assert_eq!(tx_thread.join().expect("tx join okay").expect("tx okay"), 384);
++    assert_eq!(
++        tx_thread.join().expect("tx join okay").expect("tx okay"),
++        384
++    );
+     let output = rx_thread.join().expect("rx join okay").expect("rx okay");
+     assert_eq!(&input[..], &output[..]);
+ }
+@@ -78,7 +81,9 @@ fn read_byte() {
+ fn test_expect_byte() {
+     let mut xmodem = Xmodem::new(Cursor::new(vec![1, 1]));
+     assert_eq!(xmodem.expect_byte(1, "1").expect("expected"), 1);
+-    let e = xmodem.expect_byte(2, "1, please").expect_err("expect the unexpected");
++    let e = xmodem
++        .expect_byte(2, "1, please")
++        .expect_err("expect the unexpected");
+     assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+ }
+ 
+@@ -138,7 +143,10 @@ fn test_can_in_packet_and_checksum() {
+         Xmodem::receive(tx, &mut output[..]).map(|_| output)
+     });
+ 
+-    assert_eq!(tx_thread.join().expect("tx join okay").expect("tx okay"), 256);
++    assert_eq!(
++        tx_thread.join().expect("tx join okay").expect("tx okay"),
++        256
++    );
+     let output = rx_thread.join().expect("rx join okay").expect("rx okay");
+     assert_eq!(&input[..], &output[..]);
+ }
+@@ -149,15 +157,24 @@ fn test_transmit_reported_bytes() {
+     let (tx, rx) = pipe();
+     let tx_thread = std::thread::spawn(move || Xmodem::transmit(&input[..], rx));
+     let rx_thread = std::thread::spawn(move || Xmodem::receive(tx, &mut output[..]));
+-    assert_eq!(tx_thread.join().expect("tx join okay").expect("tx okay"), 50);
+-    assert_eq!(rx_thread.join().expect("rx join okay").expect("rx okay"), 128);
++    assert_eq!(
++        tx_thread.join().expect("tx join okay").expect("tx okay"),
++        50
++    );
++    assert_eq!(
++        rx_thread.join().expect("rx join okay").expect("rx okay"),
++        128
++    );
+ }
+ 
+ #[test]
+ fn test_raw_transmission() {
+     let mut input = [0u8; 256];
+     let mut output = [0u8; 256];
+-    (0..256usize).into_iter().enumerate().for_each(|(i, b)| input[i] = b as u8);
++    (0..256usize)
++        .into_iter()
++        .enumerate()
++        .for_each(|(i, b)| input[i] = b as u8);
+ 
+     let (mut tx, mut rx) = pipe();
+     let tx_thread = std::thread::spawn(move || {
+@@ -176,12 +193,18 @@ fn test_raw_transmission() {
+     // check packet 1
+     assert_eq!(&rx_buf[0..3], &[SOH, 1, 255 - 1]);
+     assert_eq!(&rx_buf[3..(3 + 128)], &input[..128]);
+-    assert_eq!(rx_buf[131], input[..128].iter().fold(0, |a: u8, b| a.wrapping_add(*b)));
++    assert_eq!(
++        rx_buf[131],
++        input[..128].iter().fold(0, |a: u8, b| a.wrapping_add(*b))
++    );
+ 
+     // check packet 2
+     assert_eq!(&rx_buf[132..135], &[SOH, 2, 255 - 2]);
+     assert_eq!(&rx_buf[135..(135 + 128)], &input[128..]);
+-    assert_eq!(rx_buf[263], input[128..].iter().fold(0, |a: u8, b| a.wrapping_add(*b)));
++    assert_eq!(
++        rx_buf[263],
++        input[128..].iter().fold(0, |a: u8, b| a.wrapping_add(*b))
++    );
+ 
+     // check EOT
+     assert_eq!(&rx_buf[264..], &[EOT, EOT]);
