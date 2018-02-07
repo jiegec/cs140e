@@ -179,7 +179,7 @@ index 9eacec9..d22fa53 100644
 +    shell::shell("> ");
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..64754bf 100644
+index 03fb8fb..0d0b1fe 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,39 @@
@@ -224,7 +224,7 @@ index 03fb8fb..64754bf 100644
  }
  
  impl<'a> Command<'a> {
-@@ -36,12 +59,166 @@ impl<'a> Command<'a> {
+@@ -36,12 +59,189 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -254,6 +254,7 @@ index 03fb8fb..64754bf 100644
 +                let path = command.path();
 +                match path {
 +                    "echo" => echo(&command),
++                    "echohex" => echohex(&command),
 +                    "uptime" => uptime(&command),
 +                    "exit" => exit(&command),
 +                    _ => kprintln!("unknown command: {}", path),
@@ -267,7 +268,7 @@ index 03fb8fb..64754bf 100644
 +            }
 +        }
 +    }
- }
++}
 +
 +fn read_line<'a>(line_vec: &'a mut StackVec<u8>) -> &'a str {
 +    let mut console = CONSOLE.lock();
@@ -335,7 +336,7 @@ index 03fb8fb..64754bf 100644
 +                    }
 +                }
 +            }
-+            byte if byte.is_ascii() => {
++            byte if byte.is_ascii_graphic() || byte == b' ' => {
 +                match line_vec.insert(cursor, byte) {
 +                    Ok(()) => {
 +                        for byte in &line_vec[cursor..] {
@@ -366,13 +367,35 @@ index 03fb8fb..64754bf 100644
 +fn echo(command: &Command) {
 +    if command.args.len() > 1 {
 +        kprint!("{}", command.args[1]);
++        if command.args.len() > 2 {
++            for arg in &command.args[2..] {
++                kprint!(" {}", *arg);
++            }
++        }
 +    }
 +
-+    for arg in &command.args[2..] {
-+        kprint!(" {}", *arg);
-+    }
 +    kprintln!();
 +}
++
++fn echohex(command: &Command) {
++    echo(&command);
++    if command.args.len() > 1 {
++        for byte in command.args[1].bytes() {
++            kprint!("{:02X}", byte);
++        }
++        if command.args.len() > 2 {
++            for arg in &command.args[2..] {
++                kprint!(" ");
++                for byte in arg.bytes() {
++                    kprint!("{:02X}", byte);
++                }
++            }
++        }
++    }
++    
++    kprintln!();
++}
++
 +
 +fn uptime(_command: &Command) {
 +    let time = current_time();
@@ -392,8 +415,7 @@ index 03fb8fb..64754bf 100644
 +            asm!("nop" :::: "volatile")
 +        }
 +    }
-+}
-\ No newline at end of file
+ }
 diff --git a/pi/src/gpio.rs b/pi/src/gpio.rs
 index 92f4233..0ad6b96 100644
 --- a/pi/src/gpio.rs
