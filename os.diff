@@ -1,3 +1,13 @@
+diff --git a/bootloader/.vscode/settings.json b/bootloader/.vscode/settings.json
+index e69de29..2dd73f2 100644
+--- a/bootloader/.vscode/settings.json
++++ b/bootloader/.vscode/settings.json
+@@ -0,0 +1,4 @@
++{
++    "rust.target": "aarch64-none-elf",
++    "rust.sysroot": "/Users/macbookair/.xargo"
++}
+\ No newline at end of file
 diff --git a/bootloader/src/kmain.rs b/bootloader/src/kmain.rs
 index 591a219..59e3ebc 100644
 --- a/bootloader/src/kmain.rs
@@ -48,6 +58,16 @@ index 591a219..59e3ebc 100644
 +        }
 +    }
  }
+diff --git a/kernel/.vscode/settings.json b/kernel/.vscode/settings.json
+index e69de29..2dd73f2 100644
+--- a/kernel/.vscode/settings.json
++++ b/kernel/.vscode/settings.json
+@@ -0,0 +1,4 @@
++{
++    "rust.target": "aarch64-none-elf",
++    "rust.sysroot": "/Users/macbookair/.xargo"
++}
+\ No newline at end of file
 diff --git a/kernel/src/console.rs b/kernel/src/console.rs
 index 557772e..f131773 100644
 --- a/kernel/src/console.rs

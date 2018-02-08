@@ -1006,7 +1006,7 @@ index 2b860cc..d37d000 100644
 +    assert_eq!(stack_vec.as_slice(), &[6, 2, 3, 4, 5, 0]);
 +}
 diff --git a/ttywrite/src/main.rs b/ttywrite/src/main.rs
-index 08d89e8..0fdc777 100644
+index 08d89e8..0cf8eb5 100644
 --- a/ttywrite/src/main.rs
 +++ b/ttywrite/src/main.rs
 @@ -1,23 +1,25 @@
@@ -1083,7 +1083,7 @@ index 08d89e8..0fdc777 100644
 +        .write_settings(&settings)
 +        .expect("settings should be valid");
 +    serial
-+        .set_timeout(Duration::new(opt.timeout, 0))
++        .set_timeout(Duration::from_secs(opt.timeout))
 +        .expect("timeout should be valid");
 +
 +    if opt.raw {
