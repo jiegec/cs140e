@@ -1,0 +1,12 @@
+diff --git a/files/firmware/config.txt b/files/firmware/config.txt
+index e69de29..754bc31 100644
+--- a/files/firmware/config.txt
++++ b/files/firmware/config.txt
+@@ -0,0 +1,4 @@
++device_tree=
++start_file=start.elf
++fixup_file=fixup.dat
++kernel_address=0x4000000
+diff --git a/files/firmware/fixup.dat b/files/firmware/fixup.dat
+index e69de29..028968d 100644
+Binary files a/files/firmware/fixup.dat and b/files/firmware/fixup.dat differ

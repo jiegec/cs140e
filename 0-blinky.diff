@@ -1,13 +1,3 @@
-diff --git a/.vscode/settings.json b/.vscode/settings.json
-index e69de29..2dd73f2 100644
---- a/.vscode/settings.json
-+++ b/.vscode/settings.json
-@@ -0,0 +1,4 @@
-+{
-+    "rust.target": "aarch64-none-elf",
-+    "rust.sysroot": "/Users/macbookair/.xargo"
-+}
-\ No newline at end of file
 diff --git a/phase3/blinky.c b/phase3/blinky.c
 index 26282d6..a44adf3 100644
 --- a/phase3/blinky.c
@@ -25,6 +15,16 @@ index 26282d6..a44adf3 100644
 +    spin_sleep_ms(1000);
 +  }
  }
+diff --git a/phase4/.vscode/settings.json b/phase4/.vscode/settings.json
+index e69de29..2dd73f2 100644
+--- a/phase4/.vscode/settings.json
++++ b/phase4/.vscode/settings.json
+@@ -0,0 +1,4 @@
++{
++    "rust.target": "aarch64-none-elf",
++    "rust.sysroot": "/Users/macbookair/.xargo"
++}
+\ No newline at end of file
 diff --git a/phase4/src/lib.rs b/phase4/src/lib.rs
 index 8019dbf..f3c9b5d 100644
 --- a/phase4/src/lib.rs
