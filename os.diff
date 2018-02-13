@@ -386,21 +386,16 @@ index 471db36..fedb2d7 100644
 +    shell::shell("> ");
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
-index fb03697..61b7d4e 100644
+index 3a1e46f..83848e3 100644
 --- a/kernel/src/lang_items.rs
 +++ b/kernel/src/lang_items.rs
-@@ -1,10 +1,19 @@
- #[no_mangle]
- #[cfg(not(test))]
+@@ -3,8 +3,15 @@
  #[lang = "panic_fmt"]
--pub extern fn panic_fmt(fmt: ::std::fmt::Arguments, file: &'static str, line: u32) -> ! {
-+pub extern "C" fn panic_fmt(fmt: ::std::fmt::Arguments, file: &'static str, line: u32) -> ! {
+ pub extern fn panic_fmt(fmt: ::std::fmt::Arguments, file: &'static str, line: u32, col: u32) -> ! {
      // FIXME: Print `fmt`, `file`, and `line` to the console.
-+    {
-+        // Avoid deadlock
-+        use console::noblock_kprintln;
-+        noblock_kprintln!("Kernel Panic at file {}\n\t\tline {}: {}", file, line, fmt);
-+    }
++    // Avoid deadlock
++    use console::noblock_kprintln;
++    noblock_kprintln!("Kernel Panic at file {}\n\t\tline {}, col {}: {}", file, line, col, fmt);
  
 -    loop { unsafe { asm!("wfe") } }
 +    loop {
@@ -480,7 +475,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..0174241 100644
+index 03fb8fb..70be602 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,37 @@
@@ -538,7 +533,7 @@ index 03fb8fb..0174241 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +57,185 @@ impl<'a> Command<'a> {
+@@ -36,12 +57,215 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -554,10 +549,11 @@ index 03fb8fb..0174241 100644
 +    spin_sleep_ms(200); // wait a little time for client to attach
 +    kprintln!("{}", BANNER);
 +
++    let mut history = Vec::new();
 +    loop {
 +        kprint!("{}", prefix);
 +
-+        let line = read_line();
++        let line = read_line(&mut history);
 +        match Command::parse(&line) {
 +            Ok(command) => {
 +                let path = command.path();
@@ -577,10 +573,11 @@ index 03fb8fb..0174241 100644
 +    }
 +}
 +
-+fn read_line() -> String {
++fn read_line(history: &mut Vec<Vec<u8>>) -> String {
 +    let mut console = CONSOLE.lock();
 +    let mut cursor = 0;
 +    let mut line_vec = Vec::with_capacity(512);
++    let mut history_index = history.len();
 +    loop {
 +        match console.read_byte() {
 +            BS | DEL => {
@@ -634,6 +631,33 @@ index 03fb8fb..0174241 100644
 +                                    console.write_byte(BEL);
 +                                }
 +                            }
++                            direction @ b'A' | direction @ b'B' => {
++                                if direction == b'A' && history_index > 0 {
++                                    // Up arrow
++                                    history_index -= 1;
++                                } else if direction == b'B' && history_index < history.len() - 1 {
++                                    // Down arrow
++                                    history_index += 1;
++                                } else {
++                                    console.write_byte(BEL);
++                                    continue;
++                                }
++
++                                cursor = line_vec.len();
++                                for _ in 0..line_vec.len() {
++                                    console.write_byte(BS);
++                                }
++                                for _ in 0..line_vec.len() {
++                                    console.write_byte(b' ');
++                                }
++                                for _ in 0..line_vec.len() {
++                                    console.write_byte(BS);
++                                }
++                                line_vec = history[history_index].clone();
++                                for byte in &line_vec {
++                                    console.write_byte(*byte);
++                                }
++                            }
 +                            _ => {
 +                                console.write_byte(BEL);
 +                            }
@@ -661,6 +685,7 @@ index 03fb8fb..0174241 100644
 +        }
 +    }
 +
++    history.push(line_vec.clone());
 +    String::from_utf8(line_vec).unwrap_or_default()
 +}
 +
