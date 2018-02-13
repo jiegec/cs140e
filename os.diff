@@ -28,10 +28,10 @@ index e69de29..eb56ef6 120000
 +../../kernel/src/allocator
 \ No newline at end of file
 diff --git a/bootloader/src/kmain.rs b/bootloader/src/kmain.rs
-index 591a219..98ab691 100644
+index 591a219..b38d1c5 100644
 --- a/bootloader/src/kmain.rs
 +++ b/bootloader/src/kmain.rs
-@@ -1,10 +1,28 @@
+@@ -1,10 +1,27 @@
  #![feature(asm, lang_items)]
 +#![feature(alloc, allocator_api, global_allocator)]
 +#![feature(optin_builtin_traits)]
@@ -57,11 +57,10 @@ index 591a219..98ab691 100644
 +#[global_allocator]
 +pub static ALLOCATOR: Allocator = Allocator::uninitialized();
 +
-+
  /// Start address of the binary to load and of the bootloader.
  const BINARY_START_ADDR: usize = 0x80000;
  const BOOTLOADER_START_ADDR: usize = 0x4000000;
-@@ -19,11 +37,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
+@@ -19,11 +36,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
  fn jump_to(addr: *mut u8) -> ! {
      unsafe {
          asm!("br $0" : : "r"(addr as usize));
@@ -112,7 +111,7 @@ index e69de29..2dd73f2 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
-index e8741cf..8b7f0e8 100644
+index e8741cf..f0607d6 100644
 --- a/kernel/src/allocator/bump.rs
 +++ b/kernel/src/allocator/bump.rs
 @@ -13,7 +13,10 @@ impl Allocator {
@@ -127,7 +126,7 @@ index e8741cf..8b7f0e8 100644
      }
  
      /// Allocates memory. Returns a pointer meeting the size and alignment
-@@ -37,7 +40,22 @@ impl Allocator {
+@@ -37,7 +40,23 @@ impl Allocator {
      /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
      /// size or alignment constraints (`AllocError::Unsupported`).
      pub fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
@@ -138,20 +137,21 @@ index e8741cf..8b7f0e8 100644
 +            return Err(AllocErr::Exhausted { request: layout });
 +        }
 +
-+        /*
-+        use console::noblock_kprintln;
-+        noblock_kprintln!(
-+            "Allocating buffer from {} to {}",
-+            new_start - layout.size(),
-+            new_start
-+        );
-+        */
++        if cfg!(dev) {
++            use console::noblock_kprintln;
++            noblock_kprintln!(
++                "Allocating buffer from {} to {}",
++                new_start - layout.size(),
++                new_start
++            );
++        }
++
 +        self.current = new_start;
 +        Ok((new_start - layout.size()) as *mut u8)
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -53,7 +71,15 @@ impl Allocator {
+@@ -53,7 +72,15 @@ impl Allocator {
      ///
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
@@ -159,14 +159,14 @@ index e8741cf..8b7f0e8 100644
 -        unimplemented!("bump deallocation")
 +    pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
 +        // Do nothing
-+        /*
-+        use console::noblock_kprintln;
-+        noblock_kprintln!(
-+            "Deallocating buffer from {} to {}",
-+            ptr as usize,
-+            ptr as usize + layout.size()
-+        );
-+        */
++        if cfg!(dev) {
++            use console::noblock_kprintln;
++            noblock_kprintln!(
++                "Deallocating buffer from {} to {}",
++                ptr as usize,
++                ptr as usize + layout.size()
++            );
++        }
      }
  }
 diff --git a/kernel/src/allocator/mod.rs b/kernel/src/allocator/mod.rs
@@ -518,14 +518,15 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..70be602 100644
+index 03fb8fb..ffe0246 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,37 @@
+@@ -1,16 +1,38 @@
 -use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::str;
 +use pi::timer::{current_time, spin_sleep_ms};
++use pi::atags::Atags;
  
  /// Error type for `Command` parse failures.
  #[derive(Debug)]
@@ -562,7 +563,7 @@ index 03fb8fb..70be602 100644
  }
  
  impl<'a> Command<'a> {
-@@ -21,10 +42,10 @@ impl<'a> Command<'a> {
+@@ -21,10 +43,10 @@ impl<'a> Command<'a> {
      ///
      /// If `s` contains no arguments, returns `Error::Empty`. If there are more
      /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
@@ -576,7 +577,7 @@ index 03fb8fb..70be602 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +57,215 @@ impl<'a> Command<'a> {
+@@ -36,12 +58,222 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -601,6 +602,7 @@ index 03fb8fb..70be602 100644
 +            Ok(command) => {
 +                let path = command.path();
 +                match path {
++                    "atags" => atags(&command),
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => exit(&command),
@@ -777,7 +779,7 @@ index 03fb8fb..70be602 100644
 +        min % 60,
 +        sec % 60
 +    );
-+}
+ }
 +
 +fn exit(_command: &Command) -> ! {
 +    kprintln!("Exit to bootloader. Detach and send a new kernel to continue.");
@@ -793,19 +795,27 @@ index 03fb8fb..70be602 100644
 +
 +fn panic(_command: &Command) -> ! {
 +    panic!("You ask me to panic!");
- }
++}
++
++fn atags(_command: &Command) {
++    for atag in Atags::get() {
++        kprintln!("{:#?}", atag);
++    }
++}
+\ No newline at end of file
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
-index 641d2f2..bc40fcb 100644
+index 641d2f2..78025eb 100644
 --- a/pi/src/atags/atag.rs
 +++ b/pi/src/atags/atag.rs
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
  use atags::raw;
-+use std::slice;
 +use std::str;
++use std::ffi::CStr;
++use std::os::raw::c_char;
  
  pub use atags::raw::{Core, Mem};
  
-@@ -9,24 +11,33 @@ pub enum Atag {
+@@ -9,24 +12,33 @@ pub enum Atag {
      Mem(raw::Mem),
      Cmd(&'static str),
      Unknown(u32),
@@ -843,7 +853,7 @@ index 641d2f2..bc40fcb 100644
      }
  }
  
-@@ -40,11 +51,15 @@ impl<'a> From<&'a raw::Atag> for Atag {
+@@ -40,11 +52,14 @@ impl<'a> From<&'a raw::Atag> for Atag {
  
          unsafe {
              match (atag.tag, &atag.kind) {
@@ -855,9 +865,8 @@ index 641d2f2..bc40fcb 100644
 +                (raw::Atag::CORE, &raw::Kind { core }) => Atag::Core(core),
 +                (raw::Atag::MEM, &raw::Kind { mem }) => Atag::Mem(mem),
 +                (raw::Atag::CMDLINE, &raw::Kind { ref cmd }) => {
-+                    let len = 4 * (atag.dwords - 2) as usize;
-+                    let cmdline = slice::from_raw_parts(&cmd.cmd as *const u8, len);
-+                    Atag::Cmd(str::from_utf8_unchecked(cmdline))
++                    let cmdline = CStr::from_ptr((&cmd.cmd as *const u8) as *const c_char);
++                    Atag::Cmd(str::from_utf8_unchecked(cmdline.to_bytes()))
 +                }
 +                (raw::Atag::NONE, _) => Atag::None,
 +                (id, _) => Atag::Unknown(id),
@@ -865,54 +874,21 @@ index 641d2f2..bc40fcb 100644
          }
      }
 diff --git a/pi/src/atags/mod.rs b/pi/src/atags/mod.rs
-index 97b9776..319f4f2 100644
+index 97b9776..d20bc56 100644
 --- a/pi/src/atags/mod.rs
 +++ b/pi/src/atags/mod.rs
-@@ -2,20 +2,21 @@ mod raw;
- mod atag;
- 
- pub use self::atag::*;
-+use std::ptr;
- 
- /// The address at which the firmware loads the ATAGS.
- const ATAG_BASE: usize = 0x100;
- 
- /// An iterator over the ATAGS on this system.
- pub struct Atags {
--    ptr: &'static raw::Atag,
-+    ptr: *const raw::Atag,
- }
- 
- impl Atags {
-     /// Returns an instance of `Atags`, an iterator over ATAGS on this system.
-     pub fn get() -> Atags {
-         Atags {
--            ptr: unsafe { &*(ATAG_BASE as *const raw::Atag) }
-+            ptr: ATAG_BASE as *const raw::Atag,
-         }
-     }
- }
-@@ -24,6 +25,22 @@ impl Iterator for Atags {
+@@ -24,6 +24,13 @@ impl Iterator for Atags {
      type Item = Atag;
  
      fn next(&mut self) -> Option<Atag> {
 -        unimplemented!("atags iterator")
-+        match unsafe { self.ptr.as_ref() } {
-+            Some(ptr) => {
-+                let atag = unsafe { &*self.ptr };
-+                match atag.next() {
-+                    Some(next_atag) => {
-+                        let result = ptr.into();
-+                        self.ptr = next_atag;
-+                        Some(result)
-+                    }
-+                    None => {
-+                        self.ptr = ptr::null();
-+                        Some(ptr.into())
-+                    }
-+                }
++        // Skip the first CORE ATAG
++        match self.ptr.next() {
++            Some(next_atag) => {
++                self.ptr = next_atag;
++                Some(next_atag.into())
 +            }
-+            None => None,
++            None => None
 +        }
      }
  }

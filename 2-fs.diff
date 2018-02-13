@@ -10,3 +10,23 @@ index e69de29..754bc31 100644
 diff --git a/files/firmware/fixup.dat b/files/firmware/fixup.dat
 index e69de29..028968d 100644
 Binary files a/files/firmware/fixup.dat and b/files/firmware/fixup.dat differ
+diff --git a/questions/atag-cmdline b/questions/atag-cmdline
+index e69de29..aa5607d 100644
+--- a/questions/atag-cmdline
++++ b/questions/atag-cmdline
+@@ -0,0 +1,2 @@
++Content:
++bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1 dma.dmachans=0x7f35 bcm2709.boardrev=0xa02082 bcm2709.serial=0xe5da193c bcm2709.uart_clock=48000000 smsc95xx.macaddr=B8:27:EB:DA:19:3C vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyS0,115200 kgdboc=ttyS0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 rootwait
+diff --git a/questions/atag-mem b/questions/atag-mem
+index e69de29..7086dea 100644
+--- a/questions/atag-mem
++++ b/questions/atag-mem
+@@ -0,0 +1,2 @@
++Memory: start=0, size=994050048
++994050048=948MiB
+diff --git a/questions/enduser-unsafe b/questions/enduser-unsafe
+index e69de29..c977762 100644
+--- a/questions/enduser-unsafe
++++ b/questions/enduser-unsafe
+@@ -0,0 +1 @@
++We can limit `unsafe' to only a small portion of code that we can easily check, leaving rest of the code safe Rust. It's hard to enforce the same constraint in C.
