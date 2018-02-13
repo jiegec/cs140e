@@ -8,24 +8,60 @@ index e69de29..2dd73f2 100644
 +    "rust.sysroot": "/Users/macbookair/.xargo"
 +}
 \ No newline at end of file
+diff --git a/bootloader/Xargo.toml b/bootloader/Xargo.toml
+index 5e8c094..3fb0b62 100644
+--- a/bootloader/Xargo.toml
++++ b/bootloader/Xargo.toml
+@@ -1,6 +1,7 @@
+ [dependencies]
+ core = {}
+ std_unicode = {}
++alloc = {}
+ 
+ [dependencies.compiler_builtins]
+ features = ["mem"]
+diff --git a/bootloader/src/allocator b/bootloader/src/allocator
+index e69de29..eb56ef6 120000
+--- a/bootloader/src/allocator
++++ b/bootloader/src/allocator
+@@ -0,0 +1 @@
++../../kernel/src/allocator
+\ No newline at end of file
 diff --git a/bootloader/src/kmain.rs b/bootloader/src/kmain.rs
-index 591a219..59e3ebc 100644
+index 591a219..98ab691 100644
 --- a/bootloader/src/kmain.rs
 +++ b/bootloader/src/kmain.rs
-@@ -1,7 +1,11 @@
+@@ -1,10 +1,28 @@
  #![feature(asm, lang_items)]
++#![feature(alloc, allocator_api, global_allocator)]
++#![feature(optin_builtin_traits)]
++#![feature(const_fn)]
  
 -extern crate xmodem;
++extern crate alloc;
  extern crate pi;
 +extern crate xmodem;
-+
+ 
 +use std::io;
 +use std::io::Write;
 +use pi::uart::MiniUart;
- 
++
++pub mod mutex;
++pub mod allocator;
  pub mod lang_items;
  
-@@ -19,11 +23,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
++#[cfg(not(test))]
++use allocator::Allocator;
++
++#[cfg(not(test))]
++#[global_allocator]
++pub static ALLOCATOR: Allocator = Allocator::uninitialized();
++
++
+ /// Start address of the binary to load and of the bootloader.
+ const BINARY_START_ADDR: usize = 0x80000;
+ const BOOTLOADER_START_ADDR: usize = 0x4000000;
+@@ -19,11 +37,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
  fn jump_to(addr: *mut u8) -> ! {
      unsafe {
          asm!("br $0" : : "r"(addr as usize));
@@ -58,6 +94,13 @@ index 591a219..59e3ebc 100644
 +        }
 +    }
  }
+diff --git a/bootloader/src/mutex.rs b/bootloader/src/mutex.rs
+index e69de29..a29af40 120000
+--- a/bootloader/src/mutex.rs
++++ b/bootloader/src/mutex.rs
+@@ -0,0 +1 @@
++../../kernel/src/mutex.rs
+\ No newline at end of file
 diff --git a/kernel/.vscode/settings.json b/kernel/.vscode/settings.json
 index e69de29..2dd73f2 100644
 --- a/kernel/.vscode/settings.json
