@@ -480,7 +480,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..17bcd73 100644
+index 03fb8fb..0174241 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,37 @@
@@ -552,7 +552,7 @@ index 03fb8fb..17bcd73 100644
  pub fn shell(prefix: &str) -> ! {
 -    unimplemented!()
 +    spin_sleep_ms(200); // wait a little time for client to attach
-+    tuna();
++    kprintln!("{}", BANNER);
 +
 +    loop {
 +        kprint!("{}", prefix);
@@ -565,7 +565,7 @@ index 03fb8fb..17bcd73 100644
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => exit(&command),
-+                    "tuna" => tuna(),
++                    "panic" => panic(&command),
 +                    "uptime" => uptime(&command),
 +                    _ => kprintln!("unknown command: {}", path),
 +                }
@@ -723,8 +723,8 @@ index 03fb8fb..17bcd73 100644
 +    }
 +}
 +
-+fn tuna() {
-+    kprintln!("{}", BANNER);
++fn panic(_command: &Command) -> ! {
++    panic!("You ask me to panic!");
  }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..bc40fcb 100644
