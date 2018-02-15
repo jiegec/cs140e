@@ -30,3 +30,15 @@ index e69de29..c977762 100644
 +++ b/questions/enduser-unsafe
 @@ -0,0 +1 @@
 +We can limit `unsafe' to only a small portion of code that we can easily check, leaving rest of the code safe Rust. It's hard to enforce the same constraint in C.
+diff --git a/questions/libc-align b/questions/libc-align
+index e69de29..812b49e 100644
+--- a/questions/libc-align
++++ b/questions/libc-align
+@@ -0,0 +1 @@
++Because `malloc' returns a pointer that is aligned for any kind of type. It must return a pointer that is aligned to max alignment, which is 2*sizeof(int). 
+diff --git a/questions/onus b/questions/onus
+index e69de29..86c3e80 100644
+--- a/questions/onus
++++ b/questions/onus
+@@ -0,0 +1 @@
++In C, the size is kept put before the memory address. In Rust, size and alignment is passed into `dealloc', so its implementation can be simplified, and size of the buffer is saved elsewhere e.g. len in String.

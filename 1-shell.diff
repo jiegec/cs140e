@@ -1175,8 +1175,28 @@ index e69de29..ae3aa4c 100644
 @@ -0,0 +1 @@
 +`UniqueVolatile' means no pointer aliasing i.e. only one `UniqueVolatile' corresponds to the underlying pointer, allowing it to be thread safe. On the other side, `Volatile' does not have this restriction.
 \ No newline at end of file
+diff --git a/volatile/src/lib.rs b/volatile/src/lib.rs
+index 4b2dda6..8424147 100644
+--- a/volatile/src/lib.rs
++++ b/volatile/src/lib.rs
+@@ -12,7 +12,6 @@ use core::ptr::Unique;
+ /// Trait implemented by **readable** volatile wrappers.
+ pub trait Readable<T> {
+     /// Returns the inner pointer.
+-    #[inline(always)]
+     fn inner(&self) -> *const T;
+ 
+     /// Reads and returns the value pointed to by `self`. The read is always
+@@ -37,7 +36,6 @@ pub trait Readable<T> {
+ pub trait Writeable<T> {
+     /// Returns the inner pointer. This function is unsafe because this returns
+     /// a _copy_ of the mutable pointer, resulting in a mutable alias.
+-    #[inline(always)]
+     unsafe fn inner(&mut self) -> *mut T;
+ 
+     /// Writes the value `val` to the inner address of `self`. The write is
 diff --git a/xmodem/src/lib.rs b/xmodem/src/lib.rs
-index c6ce954..b42f885 100644
+index c6ce954..472303b 100644
 --- a/xmodem/src/lib.rs
 +++ b/xmodem/src/lib.rs
 @@ -1,6 +1,7 @@
@@ -1304,7 +1324,7 @@ index c6ce954..b42f885 100644
      }
  
      /// Reads a single byte from the inner I/O stream and compares it to `byte`.
-@@ -188,7 +224,20 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -188,7 +224,18 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      /// of `ConnectionAborted` is returned. Otherwise, the error kind is
      /// `InvalidData`.
      fn expect_byte(&mut self, byte: u8, expected: &'static str) -> io::Result<u8> {
@@ -1313,20 +1333,18 @@ index c6ce954..b42f885 100644
 +
 +        if byte_in == byte {
 +            Ok(byte)
++        } else if byte_in == CAN {
++            Err(io::Error::new(
++                io::ErrorKind::ConnectionAborted,
++                "received CAN",
++            ))
 +        } else {
-+            if byte_in == CAN {
-+                Err(io::Error::new(
-+                    io::ErrorKind::ConnectionAborted,
-+                    "received CAN",
-+                ))
-+            } else {
-+                Err(io::Error::new(io::ErrorKind::InvalidData, expected))
-+            }
++            Err(io::Error::new(io::ErrorKind::InvalidData, expected))
 +        }
      }
  
      /// Reads (downloads) a single packet from the inner stream using the XMODEM
-@@ -215,7 +264,57 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -215,7 +262,57 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      ///
      /// An error of kind `UnexpectedEof` is returned if `buf.len() < 128`.
      pub fn read_packet(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -1338,7 +1356,7 @@ index c6ce954..b42f885 100644
 +            ));
 +        }
 +
-+        if self.started == false {
++        if !self.started {
 +            self.write_byte(NAK)?;
 +            self.started = true;
 +            (self.progress)(Progress::Started);
@@ -1385,12 +1403,12 @@ index c6ce954..b42f885 100644
      }
  
      /// Sends (uploads) a single packet to the inner stream using the XMODEM
-@@ -249,7 +348,57 @@ impl<T: io::Read + io::Write> Xmodem<T> {
+@@ -249,7 +346,57 @@ impl<T: io::Read + io::Write> Xmodem<T> {
      ///
      /// An error of kind `Interrupted` is returned if a packet checksum fails.
      pub fn write_packet(&mut self, buf: &[u8]) -> io::Result<usize> {
 -        unimplemented!()
-+        if buf.len() < 128 && buf.len() != 0 {
++        if buf.len() < 128 && !buf.is_empty() {
 +            return Err(io::Error::new(
 +                io::ErrorKind::UnexpectedEof,
 +                "buf.len() should not be less than 128",
@@ -1404,7 +1422,7 @@ index c6ce954..b42f885 100644
 +            (self.progress)(Progress::Started);
 +        }
 +
-+        if buf.len() == 0 {
++        if buf.is_empty() {
 +            self.write_byte(EOT)?;
 +            self.expect_byte(NAK, "expected NAK for EOT")?;
 +            self.write_byte(EOT)?;

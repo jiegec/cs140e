@@ -27,15 +27,24 @@ index e69de29..eb56ef6 120000
 @@ -0,0 +1 @@
 +../../kernel/src/allocator
 \ No newline at end of file
+diff --git a/bootloader/src/console.rs b/bootloader/src/console.rs
+index e69de29..9bf5d6e 120000
+--- a/bootloader/src/console.rs
++++ b/bootloader/src/console.rs
+@@ -0,0 +1 @@
++../../kernel/src/console.rs
+\ No newline at end of file
 diff --git a/bootloader/src/kmain.rs b/bootloader/src/kmain.rs
-index 591a219..b38d1c5 100644
+index 591a219..ba6170e 100644
 --- a/bootloader/src/kmain.rs
 +++ b/bootloader/src/kmain.rs
-@@ -1,10 +1,27 @@
+@@ -1,10 +1,30 @@
  #![feature(asm, lang_items)]
 +#![feature(alloc, allocator_api, global_allocator)]
 +#![feature(optin_builtin_traits)]
 +#![feature(const_fn)]
++#![feature(decl_macro)]
++#![feature(core_intrinsics)]
  
 -extern crate xmodem;
 +extern crate alloc;
@@ -47,6 +56,7 @@ index 591a219..b38d1c5 100644
 +use pi::uart::MiniUart;
 +
 +pub mod mutex;
++pub mod console;
 +pub mod allocator;
  pub mod lang_items;
  
@@ -60,7 +70,7 @@ index 591a219..b38d1c5 100644
  /// Start address of the binary to load and of the bootloader.
  const BINARY_START_ADDR: usize = 0x80000;
  const BOOTLOADER_START_ADDR: usize = 0x4000000;
-@@ -19,11 +36,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
+@@ -19,11 +39,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
  fn jump_to(addr: *mut u8) -> ! {
      unsafe {
          asm!("br $0" : : "r"(addr as usize));
@@ -110,8 +120,138 @@ index e69de29..2dd73f2 100644
 +    "rust.sysroot": "/Users/macbookair/.xargo"
 +}
 \ No newline at end of file
+diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
+index e2aee8b..dbe2f3c 100644
+--- a/kernel/Cargo.toml
++++ b/kernel/Cargo.toml
+@@ -9,7 +9,6 @@ path = "src/kmain.rs"
+ 
+ [profile.dev]
+ panic = "abort"
+-lto = true
+ debug = true
+ 
+ [profile.test]
+diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
+index 28384f2..3daae5b 100644
+--- a/kernel/src/allocator/bin.rs
++++ b/kernel/src/allocator/bin.rs
+@@ -1,19 +1,40 @@
+-use std::fmt;
++use std::cmp::max;
++use std::cmp::min;
+ use alloc::heap::{AllocErr, Layout};
+ 
+ use allocator::util::*;
+ use allocator::linked_list::LinkedList;
++use std::mem::size_of;
++
++const SIZEOF_USIZE: usize = size_of::<usize>();
+ 
+ /// A simple allocator that allocates based on size classes.
++#[derive(Debug)]
+ pub struct Allocator {
+     // FIXME: Add the necessary fields.
++    // minimum=usize=8B, 2^3B
++    free_list: [LinkedList; 32],
+ }
+ 
+ impl Allocator {
+     /// Creates a new bin allocator that will allocate memory from the region
+     /// starting at address `start` and ending at address `end`.
+     pub fn new(start: usize, end: usize) -> Allocator {
+-        unimplemented!("bin allocator")
++        let mut free_list = [LinkedList::new(); 32];
++        let mut current_start = start;
++
++        while current_start < end {
++            let lowbit = current_start & (!current_start + 1);
++            let size = max(min(lowbit, prev_power_of_two(end - current_start)), SIZEOF_USIZE);
++            unsafe {
++                free_list[size.trailing_zeros() as usize].push(current_start as *mut usize);
++            }
++            current_start += size;
++        }
++
++        Allocator {
++            free_list: free_list,
++        }
+     }
+ 
+     /// Allocates memory. Returns a pointer meeting the size and alignment
+@@ -37,7 +58,31 @@ impl Allocator {
+     /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
+     /// size or alignment constraints (`AllocError::Unsupported`).
+     pub fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
+-        unimplemented!("bin allocation")
++        let size = max(
++            layout.size().next_power_of_two(),
++            max(layout.align(), SIZEOF_USIZE),
++        );
++        let class = size.trailing_zeros() as usize;
++        for i in class..self.free_list.len() {
++            if !self.free_list[i].is_empty() {
++                for j in (class + 1..i + 1).rev() {
++                    let block = self.free_list[j]
++                        .pop()
++                        .expect("bigger block should have free space");
++                    unsafe {
++                        self.free_list[j - 1].push((block as usize + (1 << (j - 1))) as *mut usize);
++                        self.free_list[j - 1].push(block);
++                    }
++                }
++
++                let result = Ok(self.free_list[class]
++                    .pop()
++                    .expect("current block should have free space now")
++                    as *mut u8);
++                return result;
++            }
++        }
++        Err(AllocErr::Exhausted { request: layout })
+     }
+ 
+     /// Deallocates the memory referenced by `ptr`.
+@@ -54,6 +99,36 @@ impl Allocator {
+     /// Parameters not meeting these conditions may result in undefined
+     /// behavior.
+     pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+-        unimplemented!("bin deallocation")
++        let size = max(
++            layout.size().next_power_of_two(),
++            max(layout.align(), SIZEOF_USIZE),
++        );
++        let class = size.trailing_zeros() as usize;
++
++        unsafe {
++            self.free_list[class].push(ptr as *mut usize);
++            let mut current_ptr = ptr as usize;
++            let mut current_class = class;
++            loop {
++                let buddy = current_ptr ^ (1 << current_class);
++                let mut flag = false;
++                for block in self.free_list[current_class].iter_mut() {
++                    if block.value() as usize == buddy {
++                        block.pop();
++                        flag = true;
++                        break;
++                    }
++                }
++                if flag {
++                    self.free_list[current_class].pop();
++                    current_ptr = min(current_ptr, buddy);
++                    current_class += 1;
++                    self.free_list[current_class]
++                        .push(current_ptr as *mut usize);
++                } else {
++                    break;
++                }
++            }
++        }
+     }
+ }
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
-index e8741cf..f0607d6 100644
+index e8741cf..dd66933 100644
 --- a/kernel/src/allocator/bump.rs
 +++ b/kernel/src/allocator/bump.rs
 @@ -13,7 +13,10 @@ impl Allocator {
@@ -121,7 +261,7 @@ index e8741cf..f0607d6 100644
 -        unimplemented!("bump allocator")
 +        Allocator {
 +            current: start,
-+            end: start + end,
++            end: end,
 +        }
      }
  
@@ -131,7 +271,7 @@ index e8741cf..f0607d6 100644
      /// size or alignment constraints (`AllocError::Unsupported`).
      pub fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
 -        unimplemented!("bump allocation")
-+        let new_start = align_up(self.current, layout.align()) + layout.size();
++        let new_start = align_up(self.current, layout.align()).saturating_add(layout.size());
 +
 +        if new_start >= self.end {
 +            return Err(AllocErr::Exhausted { request: layout });
@@ -170,10 +310,10 @@ index e8741cf..f0607d6 100644
      }
  }
 diff --git a/kernel/src/allocator/mod.rs b/kernel/src/allocator/mod.rs
-index 5e23e6b..4a9ab2b 100644
+index f82206d..95c44b7 100644
 --- a/kernel/src/allocator/mod.rs
 +++ b/kernel/src/allocator/mod.rs
-@@ -7,6 +7,7 @@ mod imp;
+@@ -10,6 +10,7 @@ mod tests;
  use mutex::Mutex;
  use alloc::heap::{Alloc, AllocErr, Layout};
  use std::cmp::max;
@@ -181,7 +321,7 @@ index 5e23e6b..4a9ab2b 100644
  
  /// Thread-safe (locking) wrapper around a particular memory allocator.
  #[derive(Debug)]
-@@ -54,7 +55,11 @@ unsafe impl<'a> Alloc for &'a Allocator {
+@@ -57,7 +58,11 @@ unsafe impl<'a> Alloc for &'a Allocator {
      /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
      /// size or alignment constraints (`AllocError::Unsupported`).
      unsafe fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
@@ -194,7 +334,7 @@ index 5e23e6b..4a9ab2b 100644
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -71,7 +76,11 @@ unsafe impl<'a> Alloc for &'a Allocator {
+@@ -74,7 +79,11 @@ unsafe impl<'a> Alloc for &'a Allocator {
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
      unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
@@ -207,9 +347,9 @@ index 5e23e6b..4a9ab2b 100644
      }
  }
  
-@@ -82,7 +91,21 @@ extern "C" {
- /// Returns the (start address, end address) of the available memory on this
- /// system.
+@@ -87,7 +96,21 @@ extern "C" {
+ ///
+ /// This function is expected to return `Some` under all normal cirumstances.
  fn memory_map() -> Option<(usize, usize)> {
 -    let binary_end = unsafe { (&_end as *const u8) as u32 };
 +    let binary_end = unsafe { (&_end as *const u8) as usize };
@@ -232,15 +372,21 @@ index 5e23e6b..4a9ab2b 100644
 +    None
  }
 diff --git a/kernel/src/allocator/util.rs b/kernel/src/allocator/util.rs
-index f855fce..acc66cd 100644
+index 11e0477..c96a7c4 100644
 --- a/kernel/src/allocator/util.rs
 +++ b/kernel/src/allocator/util.rs
-@@ -6,7 +6,11 @@
+@@ -1,3 +1,5 @@
++use std::intrinsics::size_of;
++
+ /// Align `addr` downwards to the nearest multiple of `align`.
+ ///
+ /// The returned usize is always <= `addr.`
+@@ -6,7 +8,11 @@
  ///
  /// Panics if `align` is not a power of 2.
  pub fn align_down(addr: usize, align: usize) -> usize {
 -    unimplemented!()
-+    if (align & (align - 1)) != 0 {
++    if !align.is_power_of_two() {
 +        panic!("align_down: align not a power of 2");
 +    }
 +
@@ -248,21 +394,19 @@ index f855fce..acc66cd 100644
  }
  
  /// Align `addr` upwards to the nearest multiple of `align`.
-@@ -17,7 +21,11 @@ pub fn align_down(addr: usize, align: usize) -> usize {
+@@ -17,5 +23,9 @@ pub fn align_down(addr: usize, align: usize) -> usize {
  ///
  /// Panics if `align` is not a power of 2.
  pub fn align_up(addr: usize, align: usize) -> usize {
 -    unimplemented!()
-+    if (align & (align - 1)) != 0 {
-+        panic!("align_down: align not a power of 2");
-+    }
++    align_down(addr.saturating_add(align - 1), align)
++}
 +
-+    (addr + align - 1) & !(align - 1)
++pub fn prev_power_of_two(num: usize) -> usize {
++    unsafe { 1 << (8 * (size_of::<usize>()) - num.leading_zeros() as usize - 1) }
  }
- 
- #[cfg(test)]
 diff --git a/kernel/src/console.rs b/kernel/src/console.rs
-index 557772e..8df9131 100644
+index e0f18f9..35609c1 100644
 --- a/kernel/src/console.rs
 +++ b/kernel/src/console.rs
 @@ -7,7 +7,7 @@ use mutex::Mutex;
@@ -326,7 +470,7 @@ index 557772e..8df9131 100644
      }
  }
  
-@@ -83,3 +84,23 @@ pub macro kprintln {
+@@ -89,3 +90,23 @@ pub macro kprintln {
  pub macro kprint($($arg:tt)*) {
      _print(format_args!($($arg)*))
  }
@@ -518,15 +662,17 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..ffe0246 100644
+index 03fb8fb..5b66761 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,38 @@
+@@ -1,16 +1,40 @@
 -use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::str;
 +use pi::timer::{current_time, spin_sleep_ms};
 +use pi::atags::Atags;
++#[cfg(not(test))]
++use ALLOCATOR;
  
  /// Error type for `Command` parse failures.
  #[derive(Debug)]
@@ -563,7 +709,7 @@ index 03fb8fb..ffe0246 100644
  }
  
  impl<'a> Command<'a> {
-@@ -21,10 +43,10 @@ impl<'a> Command<'a> {
+@@ -21,10 +45,10 @@ impl<'a> Command<'a> {
      ///
      /// If `s` contains no arguments, returns `Error::Empty`. If there are more
      /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
@@ -577,7 +723,7 @@ index 03fb8fb..ffe0246 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +58,222 @@ impl<'a> Command<'a> {
+@@ -36,12 +60,229 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -606,6 +752,7 @@ index 03fb8fb..ffe0246 100644
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => exit(&command),
++                    "memstat" => memstat(&command),
 +                    "panic" => panic(&command),
 +                    "uptime" => uptime(&command),
 +                    _ => kprintln!("unknown command: {}", path),
@@ -779,10 +926,11 @@ index 03fb8fb..ffe0246 100644
 +        min % 60,
 +        sec % 60
 +    );
- }
++}
 +
 +fn exit(_command: &Command) -> ! {
-+    kprintln!("Exit to bootloader. Detach and send a new kernel to continue.");
++    kprintln!("Might be dangerous: bootloader might be corrupted.");
++    kprintln!("Now exiting to bootloader. Detach and send a new kernel to continue.");
 +    // in line with bootloader
 +    const BOOTLOADER_START_ADDR: usize = 0x4000000;
 +    unsafe {
@@ -799,10 +947,14 @@ index 03fb8fb..ffe0246 100644
 +
 +fn atags(_command: &Command) {
 +    for atag in Atags::get() {
-+        kprintln!("{:#?}", atag);
++        kprintln!("{:?}", atag);
 +    }
 +}
-\ No newline at end of file
++
++fn memstat(_command: &Command) {
++    #[cfg(not(test))]
++    kprintln!("Allocator: {:?}", ALLOCATOR);
+ }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
 --- a/pi/src/atags/atag.rs
@@ -893,7 +1045,7 @@ index 97b9776..d20bc56 100644
      }
  }
 diff --git a/pi/src/atags/raw.rs b/pi/src/atags/raw.rs
-index 19162c3..2558f62 100644
+index 19162c3..891e209 100644
 --- a/pi/src/atags/raw.rs
 +++ b/pi/src/atags/raw.rs
 @@ -3,7 +3,7 @@
@@ -911,8 +1063,8 @@ index 19162c3..2558f62 100644
      pub fn next(&self) -> Option<&Atag> {
 -        unimplemented!()
 +        unsafe {
-+            let addr = ((self) as *const Atag) as *const u8;
-+            let next_atag = addr.offset(4 * self.dwords as isize) as *mut Atag;
++            let addr = (self as *const Atag) as *const u32;
++            let next_atag = addr.offset(self.dwords as isize) as *mut Atag;
 +
 +            match (*next_atag).tag {
 +                super::raw::Atag::NONE => None,
