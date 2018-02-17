@@ -35,7 +35,7 @@ index e69de29..9bf5d6e 120000
 +../../kernel/src/console.rs
 \ No newline at end of file
 diff --git a/bootloader/src/kmain.rs b/bootloader/src/kmain.rs
-index 591a219..ba6170e 100644
+index 591a219..a3cbd2b 100644
 --- a/bootloader/src/kmain.rs
 +++ b/bootloader/src/kmain.rs
 @@ -1,10 +1,30 @@
@@ -70,7 +70,7 @@ index 591a219..ba6170e 100644
  /// Start address of the binary to load and of the bootloader.
  const BINARY_START_ADDR: usize = 0x80000;
  const BOOTLOADER_START_ADDR: usize = 0x4000000;
-@@ -19,11 +39,31 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
+@@ -19,11 +39,32 @@ const MAX_BINARY_SIZE: usize = BOOTLOADER_START_ADDR - BINARY_START_ADDR;
  fn jump_to(addr: *mut u8) -> ! {
      unsafe {
          asm!("br $0" : : "r"(addr as usize));
@@ -84,6 +84,7 @@ index 591a219..ba6170e 100644
  #[no_mangle]
  pub extern "C" fn kmain() {
      // FIXME: Implement the bootloader.
++    ALLOCATOR.initialize();
 +    let mut uart = MiniUart::new();
 +    uart.set_read_timeout(750);
 +
@@ -132,6 +133,19 @@ index e2aee8b..dbe2f3c 100644
  debug = true
  
  [profile.test]
+diff --git a/kernel/Makefile b/kernel/Makefile
+index c61963e..48b2c79 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -3,7 +3,7 @@ CROSS ?= $(TARGET)
+ 
+ CC := $(CROSS)-gcc
+ TTYWRITE ?= ttywrite
+-PI_TTY ?= /dev/tty.SLAB_USBtoUART
++PI_TTY ?= /dev/tty.SLAB_USBtoUART -b 230400
+ CCFLAGS ?= -Wall -O2 -nostdlib -nostartfiles -ffreestanding -pie -fpie
+ LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
+ XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
 index 28384f2..3daae5b 100644
 --- a/kernel/src/allocator/bin.rs
@@ -372,7 +386,7 @@ index f82206d..95c44b7 100644
 +    None
  }
 diff --git a/kernel/src/allocator/util.rs b/kernel/src/allocator/util.rs
-index 11e0477..c96a7c4 100644
+index 11e0477..30e7462 100644
 --- a/kernel/src/allocator/util.rs
 +++ b/kernel/src/allocator/util.rs
 @@ -1,3 +1,5 @@
@@ -394,17 +408,18 @@ index 11e0477..c96a7c4 100644
  }
  
  /// Align `addr` upwards to the nearest multiple of `align`.
-@@ -17,5 +23,9 @@ pub fn align_down(addr: usize, align: usize) -> usize {
+@@ -17,5 +23,10 @@ pub fn align_down(addr: usize, align: usize) -> usize {
  ///
  /// Panics if `align` is not a power of 2.
  pub fn align_up(addr: usize, align: usize) -> usize {
 -    unimplemented!()
 +    align_down(addr.saturating_add(align - 1), align)
-+}
+ }
 +
 +pub fn prev_power_of_two(num: usize) -> usize {
 +    unsafe { 1 << (8 * (size_of::<usize>()) - num.leading_zeros() as usize - 1) }
- }
++}
++
 diff --git a/kernel/src/console.rs b/kernel/src/console.rs
 index e0f18f9..35609c1 100644
 --- a/kernel/src/console.rs
@@ -662,7 +677,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..5b66761 100644
+index 03fb8fb..aff589b 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,40 @@
@@ -929,7 +944,7 @@ index 03fb8fb..5b66761 100644
 +}
 +
 +fn exit(_command: &Command) -> ! {
-+    kprintln!("Might be dangerous: bootloader might be corrupted.");
++    kprintln!("Might be dangerous: bootloader might be corrupted, especially when using bin allocator.");
 +    kprintln!("Now exiting to bootloader. Detach and send a new kernel to continue.");
 +    // in line with bootloader
 +    const BOOTLOADER_START_ADDR: usize = 0x4000000;
@@ -1196,7 +1211,7 @@ index e0aa184..db60af2 100644
 +    spin_sleep_us(ms * 1000);
  }
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
-index 92b6159..4d00b59 100644
+index 92b6159..91ca7a3 100644
 --- a/pi/src/uart.rs
 +++ b/pi/src/uart.rs
 @@ -24,6 +24,26 @@ enum LsrStatus {
@@ -1226,7 +1241,7 @@ index 92b6159..4d00b59 100644
  }
  
  /// The Raspberry Pi's "mini UART".
-@@ -46,27 +66,41 @@ impl MiniUart {
+@@ -46,27 +66,42 @@ impl MiniUart {
              (*AUX_ENABLES).or_mask(1);
              &mut *(MU_REG_BASE as *mut Registers)
          };
@@ -1241,7 +1256,8 @@ index 92b6159..4d00b59 100644
 +        // baudrate = system_clock_freq / (8 * (baud_reg + 1))
 +        // system_clock_freq is 250MHz (Page 10)
 +        // 250MHz / 8 / 115200 - 1 = 270
-+        registers.AUX_MU_BAUD.write(270); // 16-bit baudrate register
++        // Using 230400 for speed
++        registers.AUX_MU_BAUD.write(135); // 16-bit baudrate register
 +        registers.AUX_MU_CNTL_REG.or_mask(0b11); // enable TX & RX
 +
 +        MiniUart {
@@ -1273,7 +1289,7 @@ index 92b6159..4d00b59 100644
      }
  
      /// Blocks until there is a byte ready to read. If a read timeout is set,
-@@ -78,17 +112,50 @@ impl MiniUart {
+@@ -78,17 +113,50 @@ impl MiniUart {
      /// returns `Ok(())`, a subsequent call to `read_byte` is guaranteed to
      /// return immediately.
      pub fn wait_for_byte(&self) -> Result<(), ()> {
@@ -1326,7 +1342,7 @@ index 92b6159..4d00b59 100644
  
  #[cfg(feature = "std")]
  mod uart_io {
-@@ -104,4 +171,34 @@ mod uart_io {
+@@ -104,4 +172,34 @@ mod uart_io {
      //
      // The `io::Write::write()` method must write all of the requested bytes
      // before returning.

@@ -36,6 +36,12 @@ index e69de29..812b49e 100644
 +++ b/questions/libc-align
 @@ -0,0 +1 @@
 +Because `malloc' returns a pointer that is aligned for any kind of type. It must return a pointer that is aligned to max alignment, which is 2*sizeof(int). 
+diff --git a/questions/ll-alloc b/questions/ll-alloc
+index e69de29..d8c8b91 100644
+--- a/questions/ll-alloc
++++ b/questions/ll-alloc
+@@ -0,0 +1 @@
++It saves the list pointers in place. Because we are implementing the allocator, it's hard to dynamically allocate some space for storing the linked list.
 diff --git a/questions/onus b/questions/onus
 index e69de29..86c3e80 100644
 --- a/questions/onus
