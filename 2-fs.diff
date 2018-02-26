@@ -1,3 +1,667 @@
+diff --git a/fat32/src/mbr.rs b/fat32/src/mbr.rs
+index d200c10..e5205e3 100644
+--- a/fat32/src/mbr.rs
++++ b/fat32/src/mbr.rs
+@@ -1,23 +1,37 @@
++use std::mem::transmute;
+ use std::{fmt, io};
+ 
+ use traits::BlockDevice;
+ 
+ #[repr(C, packed)]
+-#[derive(Copy, Clone)]
++#[derive(Debug, Copy, Clone)]
+ pub struct CHS {
+     // FIXME: Fill me in.
++    head: u8,
++    sector_and_high_cylinder: u8,
++    low_cylinder: u8,
+ }
+ 
+ #[repr(C, packed)]
+ #[derive(Debug, Clone)]
+ pub struct PartitionEntry {
+     // FIXME: Fill me in.
++    boot_indicator: u8,
++    first_sector: CHS,
++    pub partition_type: u8, // 0xB or 0xC for FAT32
++    last_sector: CHS,
++    pub first_sector_lba: u32,
++    num_sectors: u32,
+ }
+ 
+ /// The master boot record (MBR).
+ #[repr(C, packed)]
+ pub struct MasterBootRecord {
+     // FIXME: Fill me in.
++    __r1: [u8; 436],
++    unique_disk_id: [u8; 10],
++    pub partitions: [PartitionEntry; 4],
++    magic: u16,
+ }
+ 
+ #[derive(Debug)]
+@@ -40,12 +54,50 @@ impl MasterBootRecord {
+     /// boot indicator. Returns `Io(err)` if the I/O error `err` occured while
+     /// reading the MBR.
+     pub fn from<T: BlockDevice>(mut device: T) -> Result<MasterBootRecord, Error> {
+-        unimplemented!("MasterBootRecord::from()")
++        let mut buf = [0u8; 512];
++        let size = device.read_sector(0, &mut buf)?;
++        if size != 512 {
++            return Err(io::Error::new(
++                io::ErrorKind::UnexpectedEof,
++                "unable to read 512 bytes of MBR",
++            ).into());
++        } else {
++            let result: MasterBootRecord = unsafe { transmute(buf) };
++            if result.magic != 0xaa55 {
++                return Err(Error::BadSignature);
++            }
++
++            for i in 0..4usize {
++                if result.partitions[i].boot_indicator != 0x00
++                    && result.partitions[i].boot_indicator != 0x80
++                {
++                    return Err(Error::UnknownBootIndicator(i as u8));
++                }
++            }
++            return Ok(result);
++        }
++    }
++
++    pub fn first_vfat_partition_lba(&self) -> Option<u32> {
++        for i in 0..4 {
++            if self.partitions[i].partition_type == 0xB || self.partitions[i].partition_type == 0xC {
++                return Some(self.partitions[i].first_sector_lba)
++            }
++        }
++        None
+     }
+ }
+ 
+ impl fmt::Debug for MasterBootRecord {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+-        unimplemented!("MasterBootRecord::fmt()")
++        f.debug_struct("MasterBootRecord")
++            .field("partitions", &self.partitions)
++            .finish()
++    }
++}
++
++impl From<io::Error> for Error {
++    fn from(err: io::Error) -> Self {
++        Error::Io(err)
+     }
+ }
+diff --git a/fat32/src/tests.rs b/fat32/src/tests.rs
+index 6e96197..77bd5a5 100644
+--- a/fat32/src/tests.rs
++++ b/fat32/src/tests.rs
+@@ -3,9 +3,14 @@ use std::io::Cursor;
+ use vfat::*;
+ use mbr::*;
+ 
+-macro check_size($T:ty, $size:expr) {
+-    assert_eq!(::std::mem::size_of::<$T>(), $size,
+-        "'{}' does not have the expected size of {}", stringify!($T), $size);
++macro check_size($T: ty, $size: expr) {
++    assert_eq!(
++        ::std::mem::size_of::<$T>(),
++        $size,
++        "'{}' does not have the expected size of {}",
++        stringify!($T),
++        $size
++    );
+ }
+ 
+ macro expect_variant($e:expr, $variant:pat $(if $($cond:tt)*)*) {
+@@ -74,6 +79,6 @@ fn check_entry_sizes() {
+ 
+ #[test]
+ fn shared_fs_is_sync_send_static() {
+-    fn f<T: Sync + Send + 'static>() {  }
++    fn f<T: Sync + Send + 'static>() {}
+     f::<Shared<VFat>>();
+ }
+diff --git a/fat32/src/vfat/cache.rs b/fat32/src/vfat/cache.rs
+index 92fd9e0..e9ba4e0 100644
+--- a/fat32/src/vfat/cache.rs
++++ b/fat32/src/vfat/cache.rs
+@@ -1,12 +1,14 @@
+-use std::{io, fmt};
++use std::{fmt, io};
+ use std::collections::HashMap;
++use std::collections::hash_map::Entry;
++use std::cmp::min;
+ 
+ use traits::BlockDevice;
+ 
+ #[derive(Debug)]
+ struct CacheEntry {
+     data: Vec<u8>,
+-    dirty: bool
++    dirty: bool,
+ }
+ 
+ pub struct CachedDevice {
+@@ -21,7 +23,7 @@ impl CachedDevice {
+     pub fn new<T: BlockDevice + 'static>(device: T) -> CachedDevice {
+         CachedDevice {
+             device: Box::new(device),
+-            cache: HashMap::new()
++            cache: HashMap::new(),
+         }
+     }
+ 
+@@ -36,7 +38,13 @@ impl CachedDevice {
+     ///
+     /// Returns an error if there is an error reading the sector from the disk.
+     pub fn get_mut(&mut self, sector: u64) -> io::Result<&mut [u8]> {
+-        unimplemented!("CachedDevice::get_mut()")
++        let sector_size = self.sector_size() as usize;
++        let mut new_vec = Vec::with_capacity(sector_size);
++        new_vec.resize(sector_size, 0);
++        self.read_sector(sector, new_vec.as_mut_slice())?;
++        let entry = self.cache.get_mut(&sector).unwrap();
++        entry.dirty = true;
++        Ok(entry.data.as_mut_slice())
+     }
+ 
+     /// Returns a reference to the cached sector `sector`. If the sector is not
+@@ -46,17 +54,62 @@ impl CachedDevice {
+     ///
+     /// Returns an error if there is an error reading the sector from the disk.
+     pub fn get(&mut self, sector: u64) -> io::Result<&[u8]> {
+-        unimplemented!("CachedDevice::get()")
++        let sector_size = self.sector_size() as usize;
++        let mut new_vec = Vec::with_capacity(sector_size);
++        new_vec.resize(sector_size, 0);
++        self.read_sector(sector, new_vec.as_mut_slice())?;
++        Ok(self.cache[&sector].data.as_slice())
+     }
+ }
+ 
+ // FIXME: Implement `BlockDevice` for `CacheDevice`.
++impl BlockDevice for CachedDevice {
++    fn read_sector(&mut self, n: u64, buf: &mut [u8]) -> io::Result<usize> {
++        let sector_size = self.sector_size() as usize;
++        match self.cache.entry(n) {
++            Entry::Occupied(mut entry) => {
++                if !entry.get().dirty {
++                    let size = min(buf.len(), sector_size);
++                    buf.copy_from_slice(&entry.get().data[0..size]);
++                    Ok(size)
++                } else {
++                    let mut new_vec = Vec::with_capacity(sector_size);
++                    new_vec.resize(sector_size, 0);
++                    let size = self.device.read_sector(n, new_vec.as_mut_slice())?;
++                    let read_size = min(buf.len(), size);
++                    buf[0..read_size].copy_from_slice(&new_vec[0..read_size]);
++                    entry.insert(CacheEntry {
++                        data: new_vec,
++                        dirty: false,
++                    });
++                    Ok(read_size)
++                }
++            }
++            Entry::Vacant(entry) => {
++                let mut new_vec = Vec::with_capacity(sector_size);
++                new_vec.resize(sector_size, 0);
++                let size = self.device.read_sector(n, new_vec.as_mut_slice())?;
++                let read_size = min(buf.len(), size);
++                buf[0..read_size].copy_from_slice(&new_vec[0..read_size]);
++                entry.insert(CacheEntry {
++                    data: new_vec,
++                    dirty: false,
++                });
++                Ok(read_size)
++            }
++        }
++    }
++
++    fn write_sector(&mut self, n: u64, buf: &[u8]) -> io::Result<usize> {
++        unimplemented!();
++    }
++}
+ 
+ impl fmt::Debug for CachedDevice {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+         f.debug_struct("CachedDevice")
+             .field("device", &"<block device>")
+-            .field("cache", &self.cache)
++            .field("cached sectors", &self.cache.keys())
+             .finish()
+     }
+ }
+diff --git a/fat32/src/vfat/cluster.rs b/fat32/src/vfat/cluster.rs
+index f6d686f..e446404 100644
+--- a/fat32/src/vfat/cluster.rs
++++ b/fat32/src/vfat/cluster.rs
+@@ -10,3 +10,13 @@ impl From<u32> for Cluster {
+ }
+ 
+ // TODO: Implement any useful helper methods on `Cluster`.
++impl Cluster {
++    pub fn cluster_num(&self) -> u32 {
++        self.0
++    }
++
++    pub fn cluster_index(&self) -> u32 {
++        // Cluster start from 2
++        self.0 - 2
++    }
++}
+diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
+index 9ef83c1..3983488 100644
+--- a/fat32/src/vfat/dir.rs
++++ b/fat32/src/vfat/dir.rs
+@@ -5,8 +5,8 @@ use std::io;
+ 
+ use traits;
+ use util::VecExt;
+-use vfat::{VFat, Shared, File, Cluster, Entry};
+-use vfat::{Metadata, Attributes, Timestamp, Time, Date};
++use vfat::{Cluster, Entry, File, Shared, VFat};
++use vfat::{Attributes, Date, Metadata, Time, Timestamp};
+ 
+ #[derive(Debug)]
+ pub struct Dir {
+@@ -14,21 +14,45 @@ pub struct Dir {
+ }
+ 
+ #[repr(C, packed)]
+-#[derive(Copy, Clone)]
++#[derive(Debug, Copy, Clone)]
+ pub struct VFatRegularDirEntry {
+     // FIXME: Fill me in.
++    short_file_name: [u8; 8],
++    short_file_extension: [u8; 3],
++    file_attributes: Attributes,
++    __r1: u8,
++    creation_time_tenths_seconds: u8,
++    creation_time: Time,
++    creation_date: Date,
++    access_date: u16,
++    high_two_bytes_first_cluster: u16,
++    last_modified_time: Time,
++    last_modified_date: Date,
++    low_two_bytes_first_cluster: u16,
++    file_size: u32,
+ }
+ 
+ #[repr(C, packed)]
+ #[derive(Copy, Clone)]
+ pub struct VFatLfnDirEntry {
+     // FIXME: Fill me in.
++    sequence_number: u8,
++    name_characters: [u8; 10],
++    attributes: Attributes,
++    type_: u8,
++    checksum_of_file_name: u8,
++    name_characters_2: [u8; 12],
++    always_zero: u16,
++    name_characters_3: [u8; 4],
+ }
+ 
+ #[repr(C, packed)]
+ #[derive(Copy, Clone)]
+ pub struct VFatUnknownDirEntry {
+     // FIXME: Fill me in.
++    __r1: [u8; 11],
++    attributes: Attributes,
++    __r2: [u8; 20],
+ }
+ 
+ pub union VFatDirEntry {
+diff --git a/fat32/src/vfat/ebpb.rs b/fat32/src/vfat/ebpb.rs
+index 2878c6f..de59997 100644
+--- a/fat32/src/vfat/ebpb.rs
++++ b/fat32/src/vfat/ebpb.rs
+@@ -1,11 +1,43 @@
++use std::mem::transmute;
+ use std::fmt;
+ 
+ use traits::BlockDevice;
+ use vfat::Error;
++use std::io;
+ 
+ #[repr(C, packed)]
+ pub struct BiosParameterBlock {
+     // FIXME: Fill me in.
++    jump_instruction: [u8; 3],
++    oem_identifier: [u8; 8],
++    pub bytes_per_sector: u16,
++    pub sectors_per_cluster: u8,
++    pub reserved_sectors: u16,
++    pub number_of_fats: u8,
++    max_directory_entries: u16,
++    total_logical_sectors: u16,
++    media_descriptor: u8,
++    sectors_per_fat: u16,
++    sectors_per_track: u16,
++    number_of_heads: u16,
++    hidden_sectors: u32,
++    large_total_logical_sectors: u32,
++    sectors_per_fat_2: u32,
++    flags: u16,
++    version: u16,
++    pub root_directory_cluster: u32,
++    location_of_fs_information_sector: u16,
++    location_of_backup_sectors: u16,
++    __r2: [u8; 12],
++    physical_drive_number: u8,
++    flags_windows_nt: u8,
++    signature: u8, // 0x28 or 0x29
++    volume_serial_number: u32,
++    volume_label: [u8; 11],
++    fs_type: [u8; 8],
++    // 0x05A now
++    __r3: [u8; 512 - 0x05A - 2],
++    magic: u16,
+ }
+ 
+ impl BiosParameterBlock {
+@@ -15,16 +47,39 @@ impl BiosParameterBlock {
+     /// # Errors
+     ///
+     /// If the EBPB signature is invalid, returns an error of `BadSignature`.
+-    pub fn from<T: BlockDevice>(
+-        mut device: T,
+-        sector: u64
+-    ) -> Result<BiosParameterBlock, Error> {
+-        unimplemented!("BiosParameterBlock::from()")
++    pub fn from<T: BlockDevice>(mut device: T, sector: u64) -> Result<BiosParameterBlock, Error> {
++        let mut buf = [0u8; 512];
++        match device.read_sector(sector, &mut buf) {
++            Ok(size) => {
++                if size != 512 {
++                    Err(Error::Io(io::Error::new(
++                        io::ErrorKind::UnexpectedEof,
++                        "unable to read 512 bytes of EBPB",
++                    )))
++                } else {
++                    let result: BiosParameterBlock = unsafe { transmute(buf) };
++                    if result.magic == 0xaa55 {
++                        Ok(result)
++                    } else {
++                        Err(Error::BadSignature)
++                    }
++                }
++            }
++            Err(err) => Err(Error::Io(err)),
++        }
++    }
++
++    pub fn sectors_per_fat(&self) -> u32 {
++        if self.sectors_per_fat > 0 {
++            self.sectors_per_fat as u32
++        } else {
++            self.sectors_per_fat_2
++        }
+     }
+ }
+ 
+ impl fmt::Debug for BiosParameterBlock {
+     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+-        unimplemented!("BiosParameterBlock::debug()")
++        f.debug_struct("BiosParameterBlock").finish()
+     }
+ }
+diff --git a/fat32/src/vfat/fat.rs b/fat32/src/vfat/fat.rs
+index c89e0ef..ee21782 100644
+--- a/fat32/src/vfat/fat.rs
++++ b/fat32/src/vfat/fat.rs
+@@ -25,7 +25,28 @@ pub struct FatEntry(pub u32);
+ impl FatEntry {
+     /// Returns the `Status` of the FAT entry `self`.
+     pub fn status(&self) -> Status {
+-        unimplemented!("FatEntry::status()")
++        let bits = self.0 & (0x0FFFFFFFu32);
++        match bits {
++            0x00000000 => {
++                Free
++            }
++            0x00000001 => {
++                Reserved
++            }
++            0x00000002 ... 0x0FFFFFEF => {
++                Data(Cluster::from(self.0))
++            }
++            0x0FFFFFF0 ... 0x0FFFFFF6 => {
++                Reserved
++            }
++            0x0FFFFFF7 => {
++                Bad
++            }
++            0x0FFFFFF8 ... 0x0FFFFFFF => {
++                Eoc(self.0)
++            }
++            _ => unreachable!()
++        }
+     }
+ }
+ 
+diff --git a/fat32/src/vfat/metadata.rs b/fat32/src/vfat/metadata.rs
+index 1822cc5..2c709cb 100644
+--- a/fat32/src/vfat/metadata.rs
++++ b/fat32/src/vfat/metadata.rs
+@@ -31,6 +31,38 @@ pub struct Metadata {
+ }
+ 
+ // FIXME: Implement `traits::Timestamp` for `Timestamp`.
++impl traits::Timestamp for Timestamp {
++    fn year(&self) -> usize {
++        ((self.date.0 >> 9) & 0x7F) as usize + 1980
++    }
++
++    /// The calendar month, starting at 1 for January. Always in range [1, 12].
++    ///
++    /// January is 1, Feburary is 2, ..., December is 12.
++    fn month(&self) -> u8 {
++        ((self.date.0 >> 5) & 0xF) as u8
++    }
++
++    /// The calendar day, starting at 1. Always in range [1, 31].
++    fn day(&self) -> u8 {
++        (self.date.0 & 0x1F) as u8
++    }
++
++    /// The 24-hour hour. Always in range [0, 24).
++    fn hour(&self) -> u8 {
++        ((self.time.0 >> 11) & 0x1F) as u8
++    }
++
++    /// The minute. Always in range [0, 60).
++    fn minute(&self) -> u8 {
++        ((self.date.0 >> 5) & 0x3F) as u8
++    }
++
++    /// The second. Always in range [0, 60).
++    fn second(&self) -> u8 {
++        (self.date.0 & 0x1F) as u8 * 2
++    }
++}
+ 
+ // FIXME: Implement `traits::Metadata` for `Metadata`.
+ 
+diff --git a/fat32/src/vfat/mod.rs b/fat32/src/vfat/mod.rs
+index bf5d791..6c073c8 100644
+--- a/fat32/src/vfat/mod.rs
++++ b/fat32/src/vfat/mod.rs
+@@ -21,3 +21,6 @@ pub use self::fat::{Status, FatEntry};
+ pub use self::metadata::{Metadata, Attributes, Date, Time, Timestamp};
+ pub use self::cache::CachedDevice;
+ pub use self::shared::Shared;
++
++#[cfg(test)]
++mod tests;
+diff --git a/fat32/src/vfat/tests.rs b/fat32/src/vfat/tests.rs
+index e69de29..c1c7bb7 100644
+--- a/fat32/src/vfat/tests.rs
++++ b/fat32/src/vfat/tests.rs
+@@ -0,0 +1,18 @@
++use std::fs;
++use std::mem::transmute;
++use super::vfat;
++
++#[test]
++fn test_raspbian_img() {
++    let file =
++        fs::File::open("/Volumes/Data/raspbian/2017-11-29-raspbian-stretch-lite.img").unwrap();
++    let mut shared_vfat = vfat::VFat::from(file).unwrap();
++    let mut vfat = shared_vfat.borrow_mut();
++    println!("{:?}", *vfat);
++    let root_cluster = vfat.root_dir_cluster;
++    let mut buffer = Vec::new();
++    vfat.read_chain(root_cluster, &mut buffer);
++    println!("{:?}", buffer);
++    let entries: &[::vfat::dir::VFatRegularDirEntry] = unsafe { transmute(buffer.as_slice()) };
++    println!("{:?}", &entries[0..10]);
++}
+\ No newline at end of file
+diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
+index f6a89cc..6f76fa0 100644
+--- a/fat32/src/vfat/vfat.rs
++++ b/fat32/src/vfat/vfat.rs
+@@ -5,9 +5,10 @@ use std::cmp::min;
+ 
+ use util::SliceExt;
+ use mbr::MasterBootRecord;
+-use vfat::{Shared, Cluster, File, Dir, Entry, FatEntry, Error, Status};
++use vfat::{Cluster, Dir, Entry, Error, FatEntry, File, Shared, Status};
+ use vfat::{BiosParameterBlock, CachedDevice};
+-use traits::{FileSystem, BlockDevice};
++use traits::{BlockDevice, FileSystem};
++use std::mem::transmute;
+ 
+ #[derive(Debug)]
+ pub struct VFat {
+@@ -17,14 +18,33 @@ pub struct VFat {
+     sectors_per_fat: u32,
+     fat_start_sector: u64,
+     data_start_sector: u64,
+-    root_dir_cluster: Cluster,
++    pub root_dir_cluster: Cluster,
+ }
+ 
+ impl VFat {
+-    pub fn from<T>(mut device: T) -> Result<Shared<VFat>, Error>
+-        where T: BlockDevice + 'static
++    pub fn from<T>(device: T) -> Result<Shared<VFat>, Error>
++    where
++        T: BlockDevice + 'static,
+     {
+-        unimplemented!("VFat::from()")
++        let mut cached_device = CachedDevice::new(device);
++        let mbr = MasterBootRecord::from(&mut cached_device)?;
++        let fat_start_sector_option = mbr.first_vfat_partition_lba();
++        if fat_start_sector_option.is_none() {
++            return Err(Error::NotFound);
++        }
++        let fat_start_sector = fat_start_sector_option.unwrap() as u64;
++        let ebpb = BiosParameterBlock::from(&mut cached_device, fat_start_sector)?;
++        let sectors_per_fat = ebpb.sectors_per_fat();
++        Ok(Shared::new(VFat {
++            device: cached_device,
++            bytes_per_sector: ebpb.bytes_per_sector,
++            sectors_per_cluster: ebpb.sectors_per_cluster,
++            sectors_per_fat: sectors_per_fat,
++            fat_start_sector: fat_start_sector + ebpb.reserved_sectors as u64,
++            data_start_sector: fat_start_sector + ebpb.reserved_sectors as u64
++                + (sectors_per_fat * ebpb.number_of_fats as u32) as u64,
++            root_dir_cluster: Cluster::from(ebpb.root_directory_cluster),
++        }))
+     }
+ 
+     // TODO: The following methods may be useful here:
+@@ -51,6 +71,67 @@ impl VFat {
+     //    reference points directly into a cached sector.
+     //
+     //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
++
++    pub fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry> {
++        let cluster_num_sector: u64 = cluster.cluster_num() as u64 * size_of::<FatEntry>() as u64
++            / self.bytes_per_sector as u64;
++        let entry_offset: usize =
++            cluster.cluster_num() as usize * size_of::<FatEntry>() % self.bytes_per_sector as usize;
++        let content = self.device.get(self.fat_start_sector + cluster_num_sector)?;
++        let entries: &[FatEntry] = unsafe { transmute(content) };
++        Ok(&entries[entry_offset / size_of::<FatEntry>()])
++    }
++
++    fn read_cluster(
++        &mut self,
++        cluster: Cluster,
++        offset: usize,
++        buf: &mut [u8],
++    ) -> io::Result<usize> {
++        let sector_size = self.device.sector_size() as usize;
++        let size = min(
++            buf.len(),
++            self.bytes_per_sector as usize * self.sectors_per_cluster as usize - offset,
++        );
++        let current_sector = self.data_start_sector
++            + cluster.cluster_index() as u64 * self.sectors_per_cluster as u64;
++        let mut bytes_read = 0;
++        let mut offset_once = offset;
++        while bytes_read < size {
++            let content = self.device.get(current_sector)?;
++            let copy_size = min(size - bytes_read - offset_once, sector_size);
++            buf[bytes_read..bytes_read + copy_size]
++                .copy_from_slice(&content[offset_once..offset_once + copy_size]);
++            offset_once = 0;
++            bytes_read += copy_size;
++        }
++
++        Ok(size)
++    }
++
++    pub fn read_chain(&mut self, start: Cluster, buf: &mut Vec<u8>) -> io::Result<usize> {
++        let mut current_cluster = start;
++        let mut current_cluster_num = 0;
++        let bytes_per_cluster = self.bytes_per_sector as usize * self.sectors_per_cluster as usize;
++        loop {
++            current_cluster_num += 1;
++            buf.resize(bytes_per_cluster * current_cluster_num, 0);
++            self.read_cluster(
++                current_cluster,
++                0,
++                &mut buf[bytes_per_cluster * (current_cluster_num - 1)..],
++            )?;
++            match self.fat_entry(current_cluster)?.status() {
++                Status::Eoc(_) => {
++                    return Ok(bytes_per_cluster * current_cluster_num);
++                }
++                Status::Data(next_cluster) => {
++                    current_cluster = next_cluster;
++                }
++                _ => unimplemented!(),
++            }
++        }
++    }
+ }
+ 
+ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +148,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+     }
+ 
+     fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
+-        where P: AsRef<Path>
++    where
++        P: AsRef<Path>,
+     {
+         unimplemented!("read only file system")
+     }
+ 
+     fn rename<P, Q>(self, _from: P, _to: Q) -> io::Result<()>
+-        where P: AsRef<Path>, Q: AsRef<Path>
++    where
++        P: AsRef<Path>,
++        Q: AsRef<Path>,
+     {
+         unimplemented!("read only file system")
+     }
 diff --git a/files/firmware/config.txt b/files/firmware/config.txt
 index e69de29..754bc31 100644
 --- a/files/firmware/config.txt
