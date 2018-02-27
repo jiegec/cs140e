@@ -1,5 +1,5 @@
 diff --git a/fat32/src/mbr.rs b/fat32/src/mbr.rs
-index d200c10..e5205e3 100644
+index d200c10..b07bf3a 100644
 --- a/fat32/src/mbr.rs
 +++ b/fat32/src/mbr.rs
 @@ -1,23 +1,37 @@
@@ -24,9 +24,9 @@ index d200c10..e5205e3 100644
      // FIXME: Fill me in.
 +    boot_indicator: u8,
 +    first_sector: CHS,
-+    pub partition_type: u8, // 0xB or 0xC for FAT32
++    partition_type: u8, // 0xB or 0xC for FAT32
 +    last_sector: CHS,
-+    pub first_sector_lba: u32,
++    first_sector_lba: u32,
 +    num_sectors: u32,
  }
  
@@ -36,12 +36,12 @@ index d200c10..e5205e3 100644
      // FIXME: Fill me in.
 +    __r1: [u8; 436],
 +    unique_disk_id: [u8; 10],
-+    pub partitions: [PartitionEntry; 4],
++    partitions: [PartitionEntry; 4],
 +    magic: u16,
  }
  
  #[derive(Debug)]
-@@ -40,12 +54,50 @@ impl MasterBootRecord {
+@@ -40,12 +54,51 @@ impl MasterBootRecord {
      /// boot indicator. Returns `Io(err)` if the I/O error `err` occured while
      /// reading the MBR.
      pub fn from<T: BlockDevice>(mut device: T) -> Result<MasterBootRecord, Error> {
@@ -72,8 +72,9 @@ index d200c10..e5205e3 100644
 +
 +    pub fn first_vfat_partition_lba(&self) -> Option<u32> {
 +        for i in 0..4 {
-+            if self.partitions[i].partition_type == 0xB || self.partitions[i].partition_type == 0xC {
-+                return Some(self.partitions[i].first_sector_lba)
++            if self.partitions[i].partition_type == 0xB || self.partitions[i].partition_type == 0xC
++            {
++                return Some(self.partitions[i].first_sector_lba);
 +            }
 +        }
 +        None
@@ -125,7 +126,7 @@ index 6e96197..77bd5a5 100644
      f::<Shared<VFat>>();
  }
 diff --git a/fat32/src/vfat/cache.rs b/fat32/src/vfat/cache.rs
-index 92fd9e0..e9ba4e0 100644
+index 92fd9e0..c8ac80a 100644
 --- a/fat32/src/vfat/cache.rs
 +++ b/fat32/src/vfat/cache.rs
 @@ -1,12 +1,14 @@
@@ -169,7 +170,7 @@ index 92fd9e0..e9ba4e0 100644
      }
  
      /// Returns a reference to the cached sector `sector`. If the sector is not
-@@ -46,17 +54,62 @@ impl CachedDevice {
+@@ -46,17 +54,64 @@ impl CachedDevice {
      ///
      /// Returns an error if there is an error reading the sector from the disk.
      pub fn get(&mut self, sector: u64) -> io::Result<&[u8]> {
@@ -227,15 +228,17 @@ index 92fd9e0..e9ba4e0 100644
  
  impl fmt::Debug for CachedDevice {
      fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        let mut keys: Vec<&u64> = self.cache.keys().collect();
++        keys.sort();
          f.debug_struct("CachedDevice")
              .field("device", &"<block device>")
 -            .field("cache", &self.cache)
-+            .field("cached sectors", &self.cache.keys())
++            .field("cached sectors", &keys)
              .finish()
      }
  }
 diff --git a/fat32/src/vfat/cluster.rs b/fat32/src/vfat/cluster.rs
-index f6d686f..e446404 100644
+index f6d686f..742842f 100644
 --- a/fat32/src/vfat/cluster.rs
 +++ b/fat32/src/vfat/cluster.rs
 @@ -10,3 +10,13 @@ impl From<u32> for Cluster {
@@ -243,20 +246,20 @@ index f6d686f..e446404 100644
  
  // TODO: Implement any useful helper methods on `Cluster`.
 +impl Cluster {
-+    pub fn cluster_num(&self) -> u32 {
++    pub(super) fn cluster_num(&self) -> u32 {
 +        self.0
 +    }
 +
-+    pub fn cluster_index(&self) -> u32 {
++    pub(super) fn cluster_index(&self) -> u32 {
 +        // Cluster start from 2
 +        self.0 - 2
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..3983488 100644
+index 9ef83c1..0cf3bf4 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
-@@ -5,8 +5,8 @@ use std::io;
+@@ -5,30 +5,52 @@ use std::io;
  
  use traits;
  use util::VecExt;
@@ -264,10 +267,17 @@ index 9ef83c1..3983488 100644
 -use vfat::{Metadata, Attributes, Timestamp, Time, Date};
 +use vfat::{Cluster, Entry, File, Shared, VFat};
 +use vfat::{Attributes, Date, Metadata, Time, Timestamp};
++use std::fmt;
++use std::str;
  
- #[derive(Debug)]
+-#[derive(Debug)]
  pub struct Dir {
-@@ -14,21 +14,45 @@ pub struct Dir {
+     // FIXME: Fill me in.
++    cluster: Cluster,
++    fs: Shared<VFat>,
++    short_name: String,
++    long_name: String,
++    metadata: Metadata,
  }
  
  #[repr(C, packed)]
@@ -277,16 +287,7 @@ index 9ef83c1..3983488 100644
      // FIXME: Fill me in.
 +    short_file_name: [u8; 8],
 +    short_file_extension: [u8; 3],
-+    file_attributes: Attributes,
-+    __r1: u8,
-+    creation_time_tenths_seconds: u8,
-+    creation_time: Time,
-+    creation_date: Date,
-+    access_date: u16,
-+    high_two_bytes_first_cluster: u16,
-+    last_modified_time: Time,
-+    last_modified_date: Date,
-+    low_two_bytes_first_cluster: u16,
++    metadata: Metadata,
 +    file_size: u32,
  }
  
@@ -295,30 +296,188 @@ index 9ef83c1..3983488 100644
  pub struct VFatLfnDirEntry {
      // FIXME: Fill me in.
 +    sequence_number: u8,
-+    name_characters: [u8; 10],
++    name_characters: [u16; 5],
 +    attributes: Attributes,
 +    type_: u8,
 +    checksum_of_file_name: u8,
-+    name_characters_2: [u8; 12],
++    name_characters_2: [u16; 6],
 +    always_zero: u16,
-+    name_characters_3: [u8; 4],
++    name_characters_3: [u16; 2],
  }
  
  #[repr(C, packed)]
  #[derive(Copy, Clone)]
  pub struct VFatUnknownDirEntry {
      // FIXME: Fill me in.
-+    __r1: [u8; 11],
++    status: u8,
++    __r1: [u8; 10],
 +    attributes: Attributes,
 +    __r2: [u8; 20],
  }
  
  pub union VFatDirEntry {
+@@ -49,8 +71,155 @@ impl Dir {
+     /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
+     /// is returned.
+     pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
+-        unimplemented!("Dir::find()")
++        use traits::{Dir, Entry};
++        let lowercase_name = match name.as_ref().to_str() {
++            Some(name_str) => name_str.to_lowercase(),
++            None => {
++                return Err(io::Error::new(
++                    io::ErrorKind::InvalidInput,
++                    "name is not valid UTF-8 string",
++                ))
++            }
++        };
++        for entry in self.entries()? {
++            if lowercase_name == entry.name().to_lowercase() {
++                return Ok(entry);
++            }
++        }
++        Err(io::Error::new(io::ErrorKind::NotFound, "entry not found"))
++    }
++
++    pub fn name(&self) -> &str {
++        if self.long_name.len() > 0 {
++            self.long_name.as_str()
++        } else {
++            self.short_name.as_str()
++        }
++    }
++
++    pub(super) fn new_root(fs: &Shared<VFat>) -> Dir {
++        let cluster = fs.borrow().root_dir_cluster;
++        Dir {
++            cluster: cluster,
++            fs: fs.clone(),
++            short_name: String::new(),
++            long_name: String::new(),
++            metadata: Metadata::default(),
++        }
+     }
+ }
+ 
+ // FIXME: Implement `trait::Dir` for `Dir`.
++pub struct EntryIterator {
++    data: Vec<u8>,
++    current_index: usize,
++    fs: Shared<VFat>,
++}
++
++impl Iterator for EntryIterator {
++    type Item = Entry;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        let entries: *const VFatDirEntry = self.data.as_ptr() as *const VFatDirEntry;
++        let mut long_file_name: Vec<u16> = Vec::new();
++        loop {
++            let current_entry: &VFatDirEntry = unsafe {
++                entries
++                    .offset(self.current_index as isize)
++                    .as_ref()
++                    .unwrap()
++            };
++            let unknown_entry = unsafe { current_entry.unknown };
++            if unknown_entry.status == 0x00 {
++                // End of FAT
++                return None;
++            } else if unknown_entry.status == 0xE5 {
++                // Deleted entry
++                self.current_index += 1;
++                continue;
++            }
++
++            // Normal entry, TODO: regard 0x05 as 0xE5
++            self.current_index += 1;
++            if unknown_entry.attributes.lfn() {
++                // Skip for now
++                let lfn_entry = unsafe { current_entry.long_filename };
++                // assume from last to first
++                long_file_name.splice(0..0, lfn_entry.name_characters_3.iter().cloned());
++                long_file_name.splice(0..0, lfn_entry.name_characters_2.iter().cloned());
++                long_file_name.splice(0..0, lfn_entry.name_characters.iter().cloned());
++            } else {
++                let regular_entry = unsafe { current_entry.regular };
++                let name = unsafe { str::from_utf8_unchecked(&regular_entry.short_file_name) }
++                    .trim_right();
++                let ext = unsafe { str::from_utf8_unchecked(&regular_entry.short_file_extension) }
++                    .trim_right();
++                let mut short_name = String::from(name);
++                if ext.len() > 0 {
++                    short_name.push_str(".");
++                    short_name.push_str(ext);
++                }
++                let mut nul_byte_index = None;
++                for (i, byte) in long_file_name.iter().enumerate() {
++                    if *byte == 0 {
++                        nul_byte_index = Some(i);
++                        break;
++                    }
++                }
++                if let Some(len) = nul_byte_index {
++                    long_file_name.truncate(len);
++                }
++                let long_name = String::from_utf16_lossy(long_file_name.as_slice());
++                let metadata = regular_entry.metadata;
++                if regular_entry.metadata.attributes.directory() {
++                    return Some(Entry::Dir(Dir {
++                        cluster: Cluster::from(regular_entry.metadata.first_cluster()),
++                        fs: self.fs.clone(),
++                        short_name,
++                        long_name,
++                        metadata,
++                    }));
++                } else {
++                    return Some(Entry::File(File {
++                        cluster: Cluster::from(regular_entry.metadata.first_cluster()),
++                        fs: self.fs.clone(),
++                        short_name,
++                        long_name,
++                        metadata,
++                    }));
++                }
++            }
++        }
++    }
++}
++
++impl traits::Dir for Dir {
++    type Entry = Entry;
++
++    /// An type that is an iterator over the entries in this directory.
++    type Iter = EntryIterator;
++
++    /// Returns an interator over the entries in this directory.
++    fn entries(&self) -> io::Result<Self::Iter> {
++        let mut data = Vec::new();
++        let mut fs = self.fs.borrow_mut();
++        fs.read_chain(self.cluster, &mut data)?;
++
++        Ok(EntryIterator {
++            data: data,
++            current_index: 0,
++            fs: self.fs.clone(),
++        })
++    }
++}
++
++impl fmt::Debug for Dir {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.debug_struct("Dir")
++            .field("short_name", &self.short_name)
++            .field("long_name", &self.long_name)
++            .field("cluster", &self.cluster)
++            .field("metadata", &self.metadata)
++            .finish()
++    }
++}
 diff --git a/fat32/src/vfat/ebpb.rs b/fat32/src/vfat/ebpb.rs
-index 2878c6f..de59997 100644
+index 2878c6f..3bb117c 100644
 --- a/fat32/src/vfat/ebpb.rs
 +++ b/fat32/src/vfat/ebpb.rs
-@@ -1,11 +1,43 @@
+@@ -1,11 +1,42 @@
 +use std::mem::transmute;
  use std::fmt;
  
@@ -331,38 +490,37 @@ index 2878c6f..de59997 100644
      // FIXME: Fill me in.
 +    jump_instruction: [u8; 3],
 +    oem_identifier: [u8; 8],
-+    pub bytes_per_sector: u16,
-+    pub sectors_per_cluster: u8,
-+    pub reserved_sectors: u16,
-+    pub number_of_fats: u8,
-+    max_directory_entries: u16,
-+    total_logical_sectors: u16,
++    pub(super) bytes_per_sector: u16,
++    pub(super) sectors_per_cluster: u8,
++    pub(super) reserved_sectors: u16,
++    pub(super) number_of_fats: u8,
++    max_directory_entries: u16, // always 0 in FAT32
++    total_logical_sectors: u16, // use _2 in FAT32
 +    media_descriptor: u8,
-+    sectors_per_fat: u16,
++    sectors_per_fat: u16, // use _2 in FAT32
 +    sectors_per_track: u16,
 +    number_of_heads: u16,
 +    hidden_sectors: u32,
-+    large_total_logical_sectors: u32,
++    total_logical_sectors_2: u32,
 +    sectors_per_fat_2: u32,
 +    flags: u16,
 +    version: u16,
-+    pub root_directory_cluster: u32,
++    pub(super) root_directory_cluster: u32,
 +    location_of_fs_information_sector: u16,
-+    location_of_backup_sectors: u16,
++    location_of_backup_sector: u16,
 +    __r2: [u8; 12],
 +    physical_drive_number: u8,
-+    flags_windows_nt: u8,
++    __r3: u8,
 +    signature: u8, // 0x28 or 0x29
 +    volume_serial_number: u32,
 +    volume_label: [u8; 11],
 +    fs_type: [u8; 8],
-+    // 0x05A now
-+    __r3: [u8; 512 - 0x05A - 2],
++    __r4: [u8; 420],
 +    magic: u16,
  }
  
  impl BiosParameterBlock {
-@@ -15,16 +47,39 @@ impl BiosParameterBlock {
+@@ -15,16 +46,39 @@ impl BiosParameterBlock {
      /// # Errors
      ///
      /// If the EBPB signature is invalid, returns an error of `BadSignature`.
@@ -393,7 +551,7 @@ index 2878c6f..de59997 100644
 +        }
 +    }
 +
-+    pub fn sectors_per_fat(&self) -> u32 {
++    pub(super) fn sectors_per_fat(&self) -> u32 {
 +        if self.sectors_per_fat > 0 {
 +            self.sectors_per_fat as u32
 +        } else {
@@ -408,15 +566,80 @@ index 2878c6f..de59997 100644
 +        f.debug_struct("BiosParameterBlock").finish()
      }
  }
+diff --git a/fat32/src/vfat/entry.rs b/fat32/src/vfat/entry.rs
+index cc1604f..269c7ad 100644
+--- a/fat32/src/vfat/entry.rs
++++ b/fat32/src/vfat/entry.rs
+@@ -1,13 +1,51 @@
+ use traits;
+-use vfat::{File, Dir, Metadata, Cluster};
++use vfat::{Cluster, Dir, File, Metadata};
+ 
+ // TODO: You may need to change this definition.
+ #[derive(Debug)]
+ pub enum Entry {
+     File(File),
+-    Dir(Dir)
++    Dir(Dir),
+ }
+ 
+ // TODO: Implement any useful helper methods on `Entry`.
+ 
+ // FIXME: Implement `traits::Entry` for `Entry`.
++impl traits::Entry for Entry {
++    type File = File;
++    type Dir = Dir;
++    type Metadata = Metadata;
++
++    fn name(&self) -> &str {
++        match self {
++            &Entry::File(ref file) => file.name(),
++            &Entry::Dir(ref dir) => dir.name(),
++        }
++    }
++
++    fn metadata(&self) -> &Self::Metadata {
++        unimplemented!()
++    }
++
++    fn as_file(&self) -> Option<&Self::File> {
++        match self {
++            &Entry::File(ref file) => Some(file),
++            _ => None
++        }
++    }
++
++    fn as_dir(&self) -> Option<&Self::Dir> {
++        match self {
++            &Entry::Dir(ref dir) => Some(dir),
++            _ => None
++        }
++    }
++
++    fn into_file(self) -> Option<Self::File> {
++        unimplemented!()
++    }
++
++    fn into_dir(self) -> Option<Self::Dir> {
++        unimplemented!()
++    }
++}
 diff --git a/fat32/src/vfat/fat.rs b/fat32/src/vfat/fat.rs
-index c89e0ef..ee21782 100644
+index c89e0ef..1b31f84 100644
 --- a/fat32/src/vfat/fat.rs
 +++ b/fat32/src/vfat/fat.rs
-@@ -25,7 +25,28 @@ pub struct FatEntry(pub u32);
+@@ -20,12 +20,33 @@ pub enum Status {
+ }
+ 
+ #[repr(C, packed)]
+-pub struct FatEntry(pub u32);
++pub struct FatEntry(u32);
+ 
  impl FatEntry {
      /// Returns the `Status` of the FAT entry `self`.
-     pub fn status(&self) -> Status {
+-    pub fn status(&self) -> Status {
 -        unimplemented!("FatEntry::status()")
++    pub(super) fn status(&self) -> Status {
 +        let bits = self.0 & (0x0FFFFFFFu32);
 +        match bits {
 +            0x00000000 => {
@@ -442,11 +665,117 @@ index c89e0ef..ee21782 100644
      }
  }
  
+diff --git a/fat32/src/vfat/file.rs b/fat32/src/vfat/file.rs
+index fed2007..290be19 100644
+--- a/fat32/src/vfat/file.rs
++++ b/fat32/src/vfat/file.rs
+@@ -1,15 +1,45 @@
+-use std::cmp::{min, max};
++use std::cmp::{max, min};
+ use std::io::{self, SeekFrom};
+ 
+ use traits;
+-use vfat::{VFat, Shared, Cluster, Metadata};
++use vfat::{Cluster, Metadata, Shared, VFat};
++use std::fmt;
+ 
+-#[derive(Debug)]
+ pub struct File {
+     // FIXME: Fill me in.
++    pub(super) cluster: Cluster,
++    pub(super) fs: Shared<VFat>,
++    pub(super) short_name: String,
++    pub(super) long_name: String,
++    pub(super) metadata: Metadata,
+ }
+ 
+ // FIXME: Implement `traits::File` (and its supertraits) for `File`.
++impl traits::File for File {
++    fn sync(&mut self) -> io::Result<()> {
++        unimplemented!()
++    }
++
++    fn size(&self) -> u64 {
++        unimplemented!()
++    }
++}
++
++impl io::Read for File {
++    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++        unimplemented!()
++    }
++}
++
++impl io::Write for File {
++    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++        unimplemented!()
++    }
++
++    fn flush(&mut self) -> io::Result<()> {
++        unimplemented!()
++    }
++}
+ 
+ impl io::Seek for File {
+     /// Seek to offset `pos` in the file.
+@@ -29,3 +59,24 @@ impl io::Seek for File {
+         unimplemented!("File::seek()")
+     }
+ }
++
++impl File {
++    pub fn name(&self) -> &str {
++        if self.long_name.len() > 0 {
++            self.long_name.as_str()
++        } else {
++            self.short_name.as_str()
++        }
++    }
++}
++
++impl fmt::Debug for File {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        f.debug_struct("File")
++            .field("short_name", &self.short_name)
++            .field("long_name", &self.long_name)
++            .field("cluster", &self.cluster)
++            .field("metadata", &self.metadata)
++            .finish()
++    }
++}
 diff --git a/fat32/src/vfat/metadata.rs b/fat32/src/vfat/metadata.rs
-index 1822cc5..2c709cb 100644
+index 1822cc5..96a70dd 100644
 --- a/fat32/src/vfat/metadata.rs
 +++ b/fat32/src/vfat/metadata.rs
-@@ -31,6 +31,38 @@ pub struct Metadata {
+@@ -18,20 +18,159 @@ pub struct Time(u16);
+ pub struct Attributes(u8);
+ 
+ /// A structure containing a date and time.
+-#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
++#[derive(Default, Copy, Clone, PartialEq, Eq)]
+ pub struct Timestamp {
+-    pub date: Date,
+-    pub time: Time
++    pub(super) date: Date,
++    pub(super) time: Time,
+ }
+ 
+ /// Metadata for a directory entry.
+-#[derive(Default, Debug, Clone)]
++#[repr(C, packed)]
++#[derive(Default, Copy, Clone)]
+ pub struct Metadata {
+     // FIXME: Fill me in.
++    pub(super) attributes: Attributes,
++    __r1: u8,
++    creation_time_tenths_seconds: u8,
++    creation_time: Time,
++    creation_date: Date,
++    access_date: Date,
++    high_two_bytes_first_cluster: u16,
++    last_modified_time: Time,
++    last_modified_date: Date,
++    low_two_bytes_first_cluster: u16,
  }
  
  // FIXME: Implement `traits::Timestamp` for `Timestamp`.
@@ -482,9 +811,107 @@ index 1822cc5..2c709cb 100644
 +        (self.date.0 & 0x1F) as u8 * 2
 +    }
 +}
++
++impl Attributes {
++    fn read_only(&self) -> bool {
++        (self.0 & 0x01) != 0
++    }
++
++    fn hidden(&self) -> bool {
++        (self.0 & 0x02) != 0
++    }
++
++    fn system(&self) -> bool {
++        (self.0 & 0x04) != 0
++    }
++
++    fn volume_id(&self) -> bool {
++        (self.0 & 0x08) != 0
++    }
++
++    pub(super) fn directory(&self) -> bool {
++        (self.0 & 0x10) != 0
++    }
++
++    fn archive(&self) -> bool {
++        (self.0 & 0x20) != 0
++    }
++
++    pub(super) fn lfn(&self) -> bool {
++        (self.0 & 0x0F) != 0
++    }
++}
  
  // FIXME: Implement `traits::Metadata` for `Metadata`.
++impl traits::Metadata for Metadata {
++    type Timestamp = Timestamp;
++
++    fn read_only(&self) -> bool {
++        self.attributes.read_only()
++    }
++
++    fn hidden(&self) -> bool {
++        self.attributes.hidden()
++    }
++
++    fn created(&self) -> Self::Timestamp {
++        Timestamp {
++            // TODO: deal with tenth second?
++            time: self.creation_time,
++            date: self.creation_date,
++        }
++    }
++
++    fn accessed(&self) -> Self::Timestamp {
++        Timestamp {
++            time: Time(0),
++            date: self.access_date,
++        }
++    }
++
++    fn modified(&self) -> Self::Timestamp {
++        Timestamp {
++            time: self.last_modified_time,
++            date: self.last_modified_date,
++        }
++    }
++}
  
+ // FIXME: Implement `fmt::Display` (to your liking) for `Metadata`.
++impl fmt::Debug for Metadata {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        use traits::Metadata;
++        f.debug_struct("Metadata")
++            .field("read_only", &self.read_only())
++            .field("hidden", &self.hidden())
++            .field("created", &self.created())
++            .field("accessed", &self.accessed())
++            .field("modified", &self.modified())
++            .finish()
++    }
++}
++
++impl fmt::Debug for Timestamp {
++    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
++        use traits::Timestamp;
++        f.write_fmt(format_args!(
++            "Timestamp {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
++            self.year(),
++            self.month(),
++            self.day(),
++            self.hour(),
++            self.minute(),
++            self.second()
++        ))
++    }
++}
++
++impl Metadata {
++    pub(super) fn first_cluster(&self) -> u32 {
++        ((self.high_two_bytes_first_cluster as u32) << 16) | self.low_two_bytes_first_cluster as u32
++    }
++}
+\ No newline at end of file
 diff --git a/fat32/src/vfat/mod.rs b/fat32/src/vfat/mod.rs
 index bf5d791..6c073c8 100644
 --- a/fat32/src/vfat/mod.rs
@@ -497,34 +924,68 @@ index bf5d791..6c073c8 100644
 +#[cfg(test)]
 +mod tests;
 diff --git a/fat32/src/vfat/tests.rs b/fat32/src/vfat/tests.rs
-index e69de29..c1c7bb7 100644
+index e69de29..b2552b0 100644
 --- a/fat32/src/vfat/tests.rs
 +++ b/fat32/src/vfat/tests.rs
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,53 @@
 +use std::fs;
 +use std::mem::transmute;
-+use super::vfat;
++use traits::FileSystem;
++use traits::Entry;
++use traits::Dir;
 +
 +#[test]
-+fn test_raspbian_img() {
++fn test_raspbian_img_vfat() {
 +    let file =
 +        fs::File::open("/Volumes/Data/raspbian/2017-11-29-raspbian-stretch-lite.img").unwrap();
-+    let mut shared_vfat = vfat::VFat::from(file).unwrap();
-+    let mut vfat = shared_vfat.borrow_mut();
-+    println!("{:?}", *vfat);
-+    let root_cluster = vfat.root_dir_cluster;
-+    let mut buffer = Vec::new();
-+    vfat.read_chain(root_cluster, &mut buffer);
-+    println!("{:?}", buffer);
-+    let entries: &[::vfat::dir::VFatRegularDirEntry] = unsafe { transmute(buffer.as_slice()) };
-+    println!("{:?}", &entries[0..10]);
++    let shared_vfat = ::vfat::VFat::from(file).unwrap();
++    {
++        let mut vfat = shared_vfat.borrow_mut();
++        let root_cluster = vfat.root_dir_cluster;
++        let mut buffer = Vec::new();
++        vfat.read_chain(root_cluster, &mut buffer).unwrap();
++        let entries: &[::vfat::dir::VFatRegularDirEntry] = unsafe { transmute(buffer.as_slice()) };
++        println!("{:?}", &entries[0..10]);
++        println!("{:?}", *vfat);
++    }
++
++    let root = shared_vfat.open("/").unwrap();
++    println!("{:?}", root);
++    let root_dir = root.as_dir().unwrap();
++    for entry in root_dir.entries().unwrap() {
++        println!("{:?}", entry);
++        if entry.is_dir() {
++            for sub_entry in entry.as_dir().unwrap().entries().unwrap() {
++                println!("{:?}", sub_entry);
++            }
++        }
++    }
++    let overlays = shared_vfat.open("/overlays/ads1015.dtbo").unwrap();
++    println!("{:?}", overlays);
 +}
-\ No newline at end of file
++
++#[test]
++fn test_raspbian_img_mbr() {
++    let file =
++        fs::File::open("/Volumes/Data/raspbian/2017-11-29-raspbian-stretch-lite.img").unwrap();
++    let mbr = ::mbr::MasterBootRecord::from(file);
++    println!("{:?}", mbr);
++}
++
++#[test]
++fn test_raspbian_img_ebpb() {
++    let mut file =
++        fs::File::open("/Volumes/Data/raspbian/2017-11-29-raspbian-stretch-lite.img").unwrap();
++    let mbr = ::mbr::MasterBootRecord::from(&mut file).unwrap();
++    let fat_start_sector = mbr.first_vfat_partition_lba().unwrap() as u64;
++    let ebpb = ::vfat::ebpb::BiosParameterBlock::from(&mut file, fat_start_sector).unwrap();
++    println!("{:?}", ebpb);
++}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index f6a89cc..6f76fa0 100644
+index f6a89cc..5828662 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -5,9 +5,10 @@ use std::cmp::min;
+@@ -5,9 +5,11 @@ use std::cmp::min;
  
  use util::SliceExt;
  use mbr::MasterBootRecord;
@@ -534,15 +995,16 @@ index f6a89cc..6f76fa0 100644
 -use traits::{FileSystem, BlockDevice};
 +use traits::{BlockDevice, FileSystem};
 +use std::mem::transmute;
++use std::path::Component;
  
  #[derive(Debug)]
  pub struct VFat {
-@@ -17,14 +18,33 @@ pub struct VFat {
+@@ -17,14 +19,33 @@ pub struct VFat {
      sectors_per_fat: u32,
      fat_start_sector: u64,
      data_start_sector: u64,
 -    root_dir_cluster: Cluster,
-+    pub root_dir_cluster: Cluster,
++    pub(super) root_dir_cluster: Cluster,
  }
  
  impl VFat {
@@ -575,12 +1037,12 @@ index f6a89cc..6f76fa0 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,6 +71,67 @@ impl VFat {
+@@ -51,15 +72,94 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
 +
-+    pub fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry> {
++    pub(super) fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry> {
 +        let cluster_num_sector: u64 = cluster.cluster_num() as u64 * size_of::<FatEntry>() as u64
 +            / self.bytes_per_sector as u64;
 +        let entry_offset: usize =
@@ -617,7 +1079,7 @@ index f6a89cc..6f76fa0 100644
 +        Ok(size)
 +    }
 +
-+    pub fn read_chain(&mut self, start: Cluster, buf: &mut Vec<u8>) -> io::Result<usize> {
++    pub(super) fn read_chain(&mut self, start: Cluster, buf: &mut Vec<u8>) -> io::Result<usize> {
 +        let mut current_cluster = start;
 +        let mut current_cluster_num = 0;
 +        let bytes_per_cluster = self.bytes_per_sector as usize * self.sectors_per_cluster as usize;
@@ -643,7 +1105,38 @@ index f6a89cc..6f76fa0 100644
  }
  
  impl<'a> FileSystem for &'a Shared<VFat> {
-@@ -67,13 +148,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+-    type File = ::traits::Dummy;
+-    type Dir = ::traits::Dummy;
+-    type Entry = ::traits::Dummy;
++    type File = File;
++    type Dir = Dir;
++    type Entry = Entry;
+ 
+     fn open<P: AsRef<Path>>(self, path: P) -> io::Result<Self::Entry> {
+-        unimplemented!("FileSystem::open()")
++        let mut current_entry = Entry::Dir(Dir::new_root(self));
++        for component in path.as_ref().components() {
++            match component {
++                Component::Prefix(_) => unimplemented!(),
++                Component::RootDir => current_entry = Entry::Dir(Dir::new_root(self)),
++                Component::CurDir => {} // do nothing
++                Component::ParentDir => unimplemented!(),
++                Component::Normal(name) => {
++                    use traits::Entry;
++                    current_entry = match current_entry.as_dir() {
++                        Some(dir) => dir.find(name)?,
++                        None => {
++                            return Err(io::Error::new(io::ErrorKind::NotFound, "file not found"))
++                        }
++                    }
++                }
++            }
++        }
++        Ok(current_entry)
+     }
+ 
+     fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
+@@ -67,13 +167,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
