@@ -256,7 +256,7 @@ index f6d686f..742842f 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..0cf3bf4 100644
+index 9ef83c1..f01125b 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
 @@ -5,30 +5,52 @@ use std::io;
@@ -277,7 +277,7 @@ index 9ef83c1..0cf3bf4 100644
 +    fs: Shared<VFat>,
 +    short_name: String,
 +    long_name: String,
-+    metadata: Metadata,
++    pub(super) metadata: Metadata,
  }
  
  #[repr(C, packed)]
@@ -420,14 +420,13 @@ index 9ef83c1..0cf3bf4 100644
 +                    long_file_name.truncate(len);
 +                }
 +                let long_name = String::from_utf16_lossy(long_file_name.as_slice());
-+                let metadata = regular_entry.metadata;
 +                if regular_entry.metadata.attributes.directory() {
 +                    return Some(Entry::Dir(Dir {
 +                        cluster: Cluster::from(regular_entry.metadata.first_cluster()),
 +                        fs: self.fs.clone(),
 +                        short_name,
 +                        long_name,
-+                        metadata,
++                        metadata: regular_entry.metadata,
 +                    }));
 +                } else {
 +                    return Some(Entry::File(File {
@@ -435,7 +434,9 @@ index 9ef83c1..0cf3bf4 100644
 +                        fs: self.fs.clone(),
 +                        short_name,
 +                        long_name,
-+                        metadata,
++                        metadata: regular_entry.metadata,
++                        file_size: regular_entry.file_size,
++                        current_offset: 0,
 +                    }));
 +                }
 +            }
@@ -452,8 +453,7 @@ index 9ef83c1..0cf3bf4 100644
 +    /// Returns an interator over the entries in this directory.
 +    fn entries(&self) -> io::Result<Self::Iter> {
 +        let mut data = Vec::new();
-+        let mut fs = self.fs.borrow_mut();
-+        fs.read_chain(self.cluster, &mut data)?;
++        self.fs.borrow_mut().read_chain(self.cluster, &mut data)?;
 +
 +        Ok(EntryIterator {
 +            data: data,
@@ -567,10 +567,10 @@ index 2878c6f..3bb117c 100644
      }
  }
 diff --git a/fat32/src/vfat/entry.rs b/fat32/src/vfat/entry.rs
-index cc1604f..269c7ad 100644
+index cc1604f..542dc6f 100644
 --- a/fat32/src/vfat/entry.rs
 +++ b/fat32/src/vfat/entry.rs
-@@ -1,13 +1,51 @@
+@@ -1,13 +1,60 @@
  use traits;
 -use vfat::{File, Dir, Metadata, Cluster};
 +use vfat::{Cluster, Dir, File, Metadata};
@@ -599,7 +599,10 @@ index cc1604f..269c7ad 100644
 +    }
 +
 +    fn metadata(&self) -> &Self::Metadata {
-+        unimplemented!()
++        match self {
++            &Entry::File(ref file) => &file.metadata,
++            &Entry::Dir(ref dir) => &dir.metadata,
++        }
 +    }
 +
 +    fn as_file(&self) -> Option<&Self::File> {
@@ -617,11 +620,17 @@ index cc1604f..269c7ad 100644
 +    }
 +
 +    fn into_file(self) -> Option<Self::File> {
-+        unimplemented!()
++        match self {
++            Entry::File(file) => Some(file),
++            _ => None
++        }
 +    }
 +
 +    fn into_dir(self) -> Option<Self::Dir> {
-+        unimplemented!()
++        match self {
++            Entry::Dir(dir) => Some(dir),
++            _ => None
++        }
 +    }
 +}
 diff --git a/fat32/src/vfat/fat.rs b/fat32/src/vfat/fat.rs
@@ -666,10 +675,10 @@ index c89e0ef..1b31f84 100644
  }
  
 diff --git a/fat32/src/vfat/file.rs b/fat32/src/vfat/file.rs
-index fed2007..290be19 100644
+index fed2007..0c20895 100644
 --- a/fat32/src/vfat/file.rs
 +++ b/fat32/src/vfat/file.rs
-@@ -1,15 +1,45 @@
+@@ -1,15 +1,47 @@
 -use std::cmp::{min, max};
 +use std::cmp::{max, min};
  use std::io::{self, SeekFrom};
@@ -687,6 +696,8 @@ index fed2007..290be19 100644
 +    pub(super) short_name: String,
 +    pub(super) long_name: String,
 +    pub(super) metadata: Metadata,
++    pub(super) file_size: u32,
++    pub(super) current_offset: u32,
  }
  
  // FIXME: Implement `traits::File` (and its supertraits) for `File`.
@@ -718,7 +729,7 @@ index fed2007..290be19 100644
  
  impl io::Seek for File {
      /// Seek to offset `pos` in the file.
-@@ -29,3 +59,24 @@ impl io::Seek for File {
+@@ -29,3 +61,25 @@ impl io::Seek for File {
          unimplemented!("File::seek()")
      }
  }
@@ -740,6 +751,7 @@ index fed2007..290be19 100644
 +            .field("long_name", &self.long_name)
 +            .field("cluster", &self.cluster)
 +            .field("metadata", &self.metadata)
++            .field("file_size", &self.file_size)
 +            .finish()
 +    }
 +}
@@ -982,7 +994,7 @@ index e69de29..b2552b0 100644
 +    println!("{:?}", ebpb);
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index f6a89cc..5828662 100644
+index f6a89cc..89fce5f 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
 @@ -5,9 +5,11 @@ use std::cmp::min;
@@ -1037,7 +1049,7 @@ index f6a89cc..5828662 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +72,94 @@ impl VFat {
+@@ -51,15 +72,93 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1117,10 +1129,8 @@ index f6a89cc..5828662 100644
 +        let mut current_entry = Entry::Dir(Dir::new_root(self));
 +        for component in path.as_ref().components() {
 +            match component {
-+                Component::Prefix(_) => unimplemented!(),
 +                Component::RootDir => current_entry = Entry::Dir(Dir::new_root(self)),
 +                Component::CurDir => {} // do nothing
-+                Component::ParentDir => unimplemented!(),
 +                Component::Normal(name) => {
 +                    use traits::Entry;
 +                    current_entry = match current_entry.as_dir() {
@@ -1130,13 +1140,14 @@ index f6a89cc..5828662 100644
 +                        }
 +                    }
 +                }
++                _ => unimplemented!(),
 +            }
 +        }
 +        Ok(current_entry)
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +167,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +166,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
