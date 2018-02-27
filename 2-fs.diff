@@ -256,7 +256,7 @@ index f6d686f..742842f 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..f01125b 100644
+index 9ef83c1..c400f0a 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
 @@ -5,30 +5,52 @@ use std::io;
@@ -316,7 +316,7 @@ index 9ef83c1..f01125b 100644
  }
  
  pub union VFatDirEntry {
-@@ -49,8 +71,155 @@ impl Dir {
+@@ -49,8 +71,163 @@ impl Dir {
      /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
      /// is returned.
      pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
@@ -364,6 +364,7 @@ index 9ef83c1..f01125b 100644
 +    data: Vec<u8>,
 +    current_index: usize,
 +    fs: Shared<VFat>,
++    bytes_per_cluster: u32,
 +}
 +
 +impl Iterator for EntryIterator {
@@ -437,6 +438,8 @@ index 9ef83c1..f01125b 100644
 +                        metadata: regular_entry.metadata,
 +                        file_size: regular_entry.file_size,
 +                        current_offset: 0,
++                        current_cluster: Some(Cluster::from(regular_entry.metadata.first_cluster())),
++                        bytes_per_cluster: self.bytes_per_cluster,
 +                    }));
 +                }
 +            }
@@ -453,12 +456,17 @@ index 9ef83c1..f01125b 100644
 +    /// Returns an interator over the entries in this directory.
 +    fn entries(&self) -> io::Result<Self::Iter> {
 +        let mut data = Vec::new();
-+        self.fs.borrow_mut().read_chain(self.cluster, &mut data)?;
++        let bytes_per_cluster = {
++            let mut fs_borrow = self.fs.borrow_mut();
++            fs_borrow.read_chain(self.cluster, &mut data)?;
++            fs_borrow.bytes_per_sector as u32 * fs_borrow.sectors_per_cluster as u32
++        };
 +
 +        Ok(EntryIterator {
 +            data: data,
 +            current_index: 0,
 +            fs: self.fs.clone(),
++            bytes_per_cluster,
 +        })
 +    }
 +}
@@ -675,17 +683,17 @@ index c89e0ef..1b31f84 100644
  }
  
 diff --git a/fat32/src/vfat/file.rs b/fat32/src/vfat/file.rs
-index fed2007..0c20895 100644
+index fed2007..34c39cf 100644
 --- a/fat32/src/vfat/file.rs
 +++ b/fat32/src/vfat/file.rs
-@@ -1,15 +1,47 @@
+@@ -1,15 +1,77 @@
 -use std::cmp::{min, max};
 +use std::cmp::{max, min};
  use std::io::{self, SeekFrom};
  
  use traits;
 -use vfat::{VFat, Shared, Cluster, Metadata};
-+use vfat::{Cluster, Metadata, Shared, VFat};
++use vfat::{Cluster, Metadata, Shared, Status, VFat};
 +use std::fmt;
  
 -#[derive(Debug)]
@@ -698,6 +706,8 @@ index fed2007..0c20895 100644
 +    pub(super) metadata: Metadata,
 +    pub(super) file_size: u32,
 +    pub(super) current_offset: u32,
++    pub(super) current_cluster: Option<Cluster>,
++    pub(super) bytes_per_cluster: u32,
  }
  
  // FIXME: Implement `traits::File` (and its supertraits) for `File`.
@@ -713,7 +723,35 @@ index fed2007..0c20895 100644
 +
 +impl io::Read for File {
 +    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-+        unimplemented!()
++        let read_size = min(buf.len(), (self.file_size - self.current_offset) as usize);
++        let mut current_offset_in_cluster = (self.current_offset % self.bytes_per_cluster) as usize;
++        let mut fs = self.fs.borrow_mut();
++        let mut rest_size = read_size;
++        let mut current_cluster = self.current_cluster;
++        let mut buffer_offset = 0;
++        while rest_size > 0 {
++            let newly_read_size = fs.read_cluster(
++                current_cluster.unwrap(),
++                current_offset_in_cluster,
++                &mut buf[buffer_offset..read_size],
++            )?;
++            if newly_read_size == self.bytes_per_cluster as usize - current_offset_in_cluster {
++                // read all content of current cluster
++                match fs.fat_entry(current_cluster.unwrap())?.status() {
++                    Status::Eoc(_) => current_cluster = None,
++                    Status::Data(next_cluster) => {
++                        current_cluster = Some(next_cluster);
++                    }
++                    _ => unimplemented!(),
++                }
++            }
++            buffer_offset += newly_read_size;
++            rest_size -= newly_read_size;
++            current_offset_in_cluster = 0;
++        }
++        self.current_offset += read_size as u32;
++        self.current_cluster = current_cluster;
++        Ok(read_size)
 +    }
 +}
 +
@@ -729,10 +767,38 @@ index fed2007..0c20895 100644
  
  impl io::Seek for File {
      /// Seek to offset `pos` in the file.
-@@ -29,3 +61,25 @@ impl io::Seek for File {
-         unimplemented!("File::seek()")
-     }
- }
+@@ -26,6 +88,52 @@ impl io::Seek for File {
+     /// Seeking before the start of a file or beyond the end of the file results
+     /// in an `InvalidInput` error.
+     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+-        unimplemented!("File::seek()")
++        let new_offset = match pos {
++            SeekFrom::Start(start) => start as u32,
++            SeekFrom::Current(offset) => self.current_offset.wrapping_add(offset as u32),
++            SeekFrom::End(offset) => self.file_size.wrapping_add(offset as u32),
++        };
++        if new_offset >= self.file_size {
++            Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "invalid seek position",
++            ))
++        } else {
++            let mut current_cluster = self.cluster;
++            let mut fs = self.fs.borrow_mut();
++            for _ in 0..(new_offset / self.bytes_per_cluster) {
++                match fs.fat_entry(current_cluster)?.status() {
++                    Status::Data(next_cluster) => {
++                        current_cluster = next_cluster;
++                    }
++                    _ => unimplemented!(),
++                }
++            }
++            self.current_cluster = Some(current_cluster);
++            self.current_offset = new_offset;
++            Ok(self.current_offset as u64)
++        }
++    }
++}
 +
 +impl File {
 +    pub fn name(&self) -> &str {
@@ -753,8 +819,8 @@ index fed2007..0c20895 100644
 +            .field("metadata", &self.metadata)
 +            .field("file_size", &self.file_size)
 +            .finish()
-+    }
-+}
+     }
+ }
 diff --git a/fat32/src/vfat/metadata.rs b/fat32/src/vfat/metadata.rs
 index 1822cc5..96a70dd 100644
 --- a/fat32/src/vfat/metadata.rs
@@ -936,15 +1002,17 @@ index bf5d791..6c073c8 100644
 +#[cfg(test)]
 +mod tests;
 diff --git a/fat32/src/vfat/tests.rs b/fat32/src/vfat/tests.rs
-index e69de29..b2552b0 100644
+index e69de29..2f4ed60 100644
 --- a/fat32/src/vfat/tests.rs
 +++ b/fat32/src/vfat/tests.rs
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,78 @@
 +use std::fs;
++use std::io::{Read, Seek, SeekFrom};
 +use std::mem::transmute;
 +use traits::FileSystem;
 +use traits::Entry;
 +use traits::Dir;
++use traits::File;
 +
 +#[test]
 +fn test_raspbian_img_vfat() {
@@ -993,11 +1061,34 @@ index e69de29..b2552b0 100644
 +    let ebpb = ::vfat::ebpb::BiosParameterBlock::from(&mut file, fat_start_sector).unwrap();
 +    println!("{:?}", ebpb);
 +}
++
++#[test]
++fn test_raspbian_img_config_txt() {
++    let mut file =
++        fs::File::open("/Volumes/Data/raspbian/2017-11-29-raspbian-stretch-lite.img").unwrap();
++    let mut shared_vfat = ::vfat::VFat::from(file).unwrap();
++    let mut config_txt = shared_vfat
++        .open("/config.txt")
++        .unwrap()
++        .into_file()
++        .unwrap();
++    let mut contents = String::new();
++    config_txt.read_to_string(&mut contents).unwrap();
++    config_txt.seek(SeekFrom::Start(0)).unwrap();
++    for i in 1..contents.len() - 2 {
++        let mut contents2 = String::new();
++        config_txt.seek(SeekFrom::Start(0)).unwrap();
++        config_txt.seek(SeekFrom::Current(i as i64)).unwrap();
++        config_txt.read_to_string(&mut contents2).unwrap();
++        println!("{:?}", contents2);
++        assert_eq!(&contents[i..], &contents2[..]);
++    }
++}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index f6a89cc..89fce5f 100644
+index f6a89cc..db5d84e 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -5,9 +5,11 @@ use std::cmp::min;
+@@ -5,26 +5,47 @@ use std::cmp::min;
  
  use util::SliceExt;
  use mbr::MasterBootRecord;
@@ -1011,7 +1102,11 @@ index f6a89cc..89fce5f 100644
  
  #[derive(Debug)]
  pub struct VFat {
-@@ -17,14 +19,33 @@ pub struct VFat {
+     device: CachedDevice,
+-    bytes_per_sector: u16,
+-    sectors_per_cluster: u8,
++    pub(super) bytes_per_sector: u16,
++    pub(super) sectors_per_cluster: u8,
      sectors_per_fat: u32,
      fat_start_sector: u64,
      data_start_sector: u64,
@@ -1049,7 +1144,7 @@ index f6a89cc..89fce5f 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +72,93 @@ impl VFat {
+@@ -51,15 +72,94 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1064,7 +1159,7 @@ index f6a89cc..89fce5f 100644
 +        Ok(&entries[entry_offset / size_of::<FatEntry>()])
 +    }
 +
-+    fn read_cluster(
++    pub(super) fn read_cluster(
 +        &mut self,
 +        cluster: Cluster,
 +        offset: usize,
@@ -1075,17 +1170,18 @@ index f6a89cc..89fce5f 100644
 +            buf.len(),
 +            self.bytes_per_sector as usize * self.sectors_per_cluster as usize - offset,
 +        );
-+        let current_sector = self.data_start_sector
++        let mut current_sector = self.data_start_sector
 +            + cluster.cluster_index() as u64 * self.sectors_per_cluster as u64;
 +        let mut bytes_read = 0;
 +        let mut offset_once = offset;
 +        while bytes_read < size {
 +            let content = self.device.get(current_sector)?;
-+            let copy_size = min(size - bytes_read - offset_once, sector_size);
++            let copy_size = min(size - bytes_read, sector_size);
 +            buf[bytes_read..bytes_read + copy_size]
 +                .copy_from_slice(&content[offset_once..offset_once + copy_size]);
 +            offset_once = 0;
 +            bytes_read += copy_size;
++            current_sector += 1;
 +        }
 +
 +        Ok(size)
@@ -1147,7 +1243,7 @@ index f6a89cc..89fce5f 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +166,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +167,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
