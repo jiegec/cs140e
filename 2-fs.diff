@@ -267,7 +267,7 @@ index f6d686f..742842f 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..c400f0a 100644
+index 9ef83c1..0a2c0c3 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
 @@ -5,30 +5,52 @@ use std::io;
@@ -327,7 +327,7 @@ index 9ef83c1..c400f0a 100644
  }
  
  pub union VFatDirEntry {
-@@ -49,8 +71,163 @@ impl Dir {
+@@ -49,8 +71,178 @@ impl Dir {
      /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
      /// is returned.
      pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
@@ -384,6 +384,7 @@ index 9ef83c1..c400f0a 100644
 +    fn next(&mut self) -> Option<Self::Item> {
 +        let entries: *const VFatDirEntry = self.data.as_ptr() as *const VFatDirEntry;
 +        let mut long_file_name: Vec<u16> = Vec::new();
++        let mut lfn_sequence_num = 0;
 +        loop {
 +            let current_entry: &VFatDirEntry = unsafe {
 +                entries
@@ -401,19 +402,31 @@ index 9ef83c1..c400f0a 100644
 +                continue;
 +            }
 +
-+            // Normal entry, TODO: regard 0x05 as 0xE5
++            // Normal entry,
 +            self.current_index += 1;
 +            if unknown_entry.attributes.lfn() {
-+                // Skip for now
 +                let lfn_entry = unsafe { current_entry.long_filename };
-+                // assume from last to first
++                if lfn_sequence_num == 0 {
++                    assert!(lfn_entry.sequence_number & (1 << 6) != 0);
++                    lfn_sequence_num = (lfn_entry.sequence_number & 0x1F) - 1;
++                } else {
++                    assert!(lfn_sequence_num == (lfn_entry.sequence_number & 0x1F));
++                    lfn_sequence_num = lfn_sequence_num - 1;
++                }
++                // now it's frrom last to first
++
 +                long_file_name.splice(0..0, lfn_entry.name_characters_3.iter().cloned());
 +                long_file_name.splice(0..0, lfn_entry.name_characters_2.iter().cloned());
 +                long_file_name.splice(0..0, lfn_entry.name_characters.iter().cloned());
 +            } else {
++                assert!(lfn_sequence_num == 0);
 +                let regular_entry = unsafe { current_entry.regular };
-+                let name = unsafe { str::from_utf8_unchecked(&regular_entry.short_file_name) }
-+                    .trim_right();
++                let mut short_file_name = regular_entry.short_file_name.clone();
++                if short_file_name[0] == 0x05 {
++                    // 0x05 is used for real 0xE5 as first byte
++                    short_file_name[0] = 0xE5;
++                }
++                let name = unsafe { str::from_utf8_unchecked(&short_file_name) }.trim_right();
 +                let ext = unsafe { str::from_utf8_unchecked(&regular_entry.short_file_extension) }
 +                    .trim_right();
 +                let mut short_name = String::from(name);
@@ -449,7 +462,9 @@ index 9ef83c1..c400f0a 100644
 +                        metadata: regular_entry.metadata,
 +                        file_size: regular_entry.file_size,
 +                        current_offset: 0,
-+                        current_cluster: Some(Cluster::from(regular_entry.metadata.first_cluster())),
++                        current_cluster: Some(Cluster::from(
++                            regular_entry.metadata.first_cluster(),
++                        )),
 +                        bytes_per_cluster: self.bytes_per_cluster,
 +                    }));
 +                }
