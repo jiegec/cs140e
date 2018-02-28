@@ -96,12 +96,12 @@ index d200c10..b07bf3a 100644
      }
  }
 diff --git a/fat32/src/tests.rs b/fat32/src/tests.rs
-index 6e96197..77bd5a5 100644
+index 1f91f15..8fcd2a3 100644
 --- a/fat32/src/tests.rs
 +++ b/fat32/src/tests.rs
-@@ -3,9 +3,14 @@ use std::io::Cursor;
- use vfat::*;
- use mbr::*;
+@@ -6,9 +6,14 @@ use vfat::{Shared, VFat, BiosParameterBlock};
+ use mbr::{MasterBootRecord, CHS, PartitionEntry};
+ use traits::*;
  
 -macro check_size($T:ty, $size:expr) {
 -    assert_eq!(::std::mem::size_of::<$T>(), $size,
@@ -117,7 +117,7 @@ index 6e96197..77bd5a5 100644
  }
  
  macro expect_variant($e:expr, $variant:pat $(if $($cond:tt)*)*) {
-@@ -74,6 +79,6 @@ fn check_entry_sizes() {
+@@ -320,6 +325,6 @@ fn test_mock3_files_recursive() {
  
  #[test]
  fn shared_fs_is_sync_send_static() {
@@ -126,18 +126,17 @@ index 6e96197..77bd5a5 100644
      f::<Shared<VFat>>();
  }
 diff --git a/fat32/src/vfat/cache.rs b/fat32/src/vfat/cache.rs
-index 92fd9e0..c8ac80a 100644
+index ea952fb..89a468c 100644
 --- a/fat32/src/vfat/cache.rs
 +++ b/fat32/src/vfat/cache.rs
-@@ -1,12 +1,14 @@
+@@ -1,4 +1,5 @@
 -use std::{io, fmt};
 +use std::{fmt, io};
++use std::io::Read;
  use std::collections::HashMap;
-+use std::collections::hash_map::Entry;
-+use std::cmp::min;
  
  use traits::BlockDevice;
- 
+@@ -6,20 +7,20 @@ use traits::BlockDevice;
  #[derive(Debug)]
  struct CacheEntry {
      data: Vec<u8>,
@@ -145,79 +144,91 @@ index 92fd9e0..c8ac80a 100644
 +    dirty: bool,
  }
  
+ pub struct Partition {
+     /// The physical sector where the partition begins.
+     pub start: u64,
+     /// The size, in bytes, of a logical sector in the partition.
+-    pub sector_size: u64
++    pub sector_size: u64,
+ }
+ 
  pub struct CachedDevice {
-@@ -21,7 +23,7 @@ impl CachedDevice {
-     pub fn new<T: BlockDevice + 'static>(device: T) -> CachedDevice {
+     device: Box<BlockDevice>,
+     cache: HashMap<u64, CacheEntry>,
+-    partition: Partition
++    partition: Partition,
+ }
+ 
+ impl CachedDevice {
+@@ -43,14 +44,15 @@ impl CachedDevice {
+     ///
+     /// Panics if the partition's sector size is < the device's sector size.
+     pub fn new<T>(device: T, partition: Partition) -> CachedDevice
+-        where T: BlockDevice + 'static
++    where
++        T: BlockDevice + 'static,
+     {
+         assert!(partition.sector_size >= device.sector_size());
+ 
          CachedDevice {
              device: Box::new(device),
--            cache: HashMap::new()
-+            cache: HashMap::new(),
+             cache: HashMap::new(),
+-            partition: partition
++            partition: partition,
          }
      }
  
-@@ -36,7 +38,13 @@ impl CachedDevice {
+@@ -81,7 +83,10 @@ impl CachedDevice {
      ///
      /// Returns an error if there is an error reading the sector from the disk.
      pub fn get_mut(&mut self, sector: u64) -> io::Result<&mut [u8]> {
 -        unimplemented!("CachedDevice::get_mut()")
-+        let sector_size = self.sector_size() as usize;
-+        let mut new_vec = Vec::with_capacity(sector_size);
-+        new_vec.resize(sector_size, 0);
-+        self.read_sector(sector, new_vec.as_mut_slice())?;
++        self.get(sector)?;
 +        let entry = self.cache.get_mut(&sector).unwrap();
 +        entry.dirty = true;
 +        Ok(entry.data.as_mut_slice())
      }
  
      /// Returns a reference to the cached sector `sector`. If the sector is not
-@@ -46,17 +54,64 @@ impl CachedDevice {
+@@ -91,18 +96,55 @@ impl CachedDevice {
      ///
      /// Returns an error if there is an error reading the sector from the disk.
      pub fn get(&mut self, sector: u64) -> io::Result<&[u8]> {
 -        unimplemented!("CachedDevice::get()")
-+        let sector_size = self.sector_size() as usize;
-+        let mut new_vec = Vec::with_capacity(sector_size);
-+        new_vec.resize(sector_size, 0);
-+        self.read_sector(sector, new_vec.as_mut_slice())?;
-+        Ok(self.cache[&sector].data.as_slice())
++        if !self.cache.contains_key(&sector) {
++            let (physical_sector, physical_sector_num) = self.virtual_to_physical(sector);
++            let physical_sector_size = self.device.sector_size();
++            let logical_sector_size = (physical_sector_size * physical_sector_num) as usize;
++            let mut new_vec = Vec::with_capacity(logical_sector_size);
++            new_vec.resize(logical_sector_size, 0);
++            for i in 0..physical_sector_num {
++                self.device.read_sector(
++                    physical_sector + i,
++                    &mut new_vec[(i * physical_sector_size) as usize..],
++                )?;
++            }
++            self.cache.insert(sector, CacheEntry {
++                data: new_vec,
++                dirty: false
++            });
++        }
++        Ok(&self.cache[&sector].data[..])
      }
  }
  
- // FIXME: Implement `BlockDevice` for `CacheDevice`.
+ // FIXME: Implement `BlockDevice` for `CacheDevice`. The `read_sector` and
+ // `write_sector` methods should only read/write from/to cached sectors.
 +impl BlockDevice for CachedDevice {
++    fn sector_size(&self) -> u64 {
++        self.partition.sector_size
++    }
++
 +    fn read_sector(&mut self, n: u64, buf: &mut [u8]) -> io::Result<usize> {
-+        let sector_size = self.sector_size() as usize;
-+        match self.cache.entry(n) {
-+            Entry::Occupied(mut entry) => {
-+                if !entry.get().dirty {
-+                    let size = min(buf.len(), sector_size);
-+                    buf.copy_from_slice(&entry.get().data[0..size]);
-+                    Ok(size)
-+                } else {
-+                    let mut new_vec = Vec::with_capacity(sector_size);
-+                    new_vec.resize(sector_size, 0);
-+                    let size = self.device.read_sector(n, new_vec.as_mut_slice())?;
-+                    let read_size = min(buf.len(), size);
-+                    buf[0..read_size].copy_from_slice(&new_vec[0..read_size]);
-+                    entry.insert(CacheEntry {
-+                        data: new_vec,
-+                        dirty: false,
-+                    });
-+                    Ok(read_size)
-+                }
-+            }
-+            Entry::Vacant(entry) => {
-+                let mut new_vec = Vec::with_capacity(sector_size);
-+                new_vec.resize(sector_size, 0);
-+                let size = self.device.read_sector(n, new_vec.as_mut_slice())?;
-+                let read_size = min(buf.len(), size);
-+                buf[0..read_size].copy_from_slice(&new_vec[0..read_size]);
-+                entry.insert(CacheEntry {
-+                    data: new_vec,
-+                    dirty: false,
-+                });
-+                Ok(read_size)
-+            }
++        if self.cache.contains_key(&n) {
++            let cached_entry = &self.cache[&n];
++            io::Cursor::new(&cached_entry.data).read(buf)
++        } else {
++            Err(io::Error::new(io::ErrorKind::Interrupted, "data not cached yet"))
 +        }
 +    }
 +
@@ -683,7 +694,7 @@ index c89e0ef..1b31f84 100644
  }
  
 diff --git a/fat32/src/vfat/file.rs b/fat32/src/vfat/file.rs
-index fed2007..34c39cf 100644
+index fed2007..3fc0b3f 100644
 --- a/fat32/src/vfat/file.rs
 +++ b/fat32/src/vfat/file.rs
 @@ -1,15 +1,77 @@
@@ -717,7 +728,7 @@ index fed2007..34c39cf 100644
 +    }
 +
 +    fn size(&self) -> u64 {
-+        unimplemented!()
++        self.file_size as u64
 +    }
 +}
 +
@@ -822,7 +833,7 @@ index fed2007..34c39cf 100644
      }
  }
 diff --git a/fat32/src/vfat/metadata.rs b/fat32/src/vfat/metadata.rs
-index 1822cc5..96a70dd 100644
+index 1822cc5..d9cc110 100644
 --- a/fat32/src/vfat/metadata.rs
 +++ b/fat32/src/vfat/metadata.rs
 @@ -18,20 +18,159 @@ pub struct Time(u16);
@@ -881,12 +892,12 @@ index 1822cc5..96a70dd 100644
 +
 +    /// The minute. Always in range [0, 60).
 +    fn minute(&self) -> u8 {
-+        ((self.date.0 >> 5) & 0x3F) as u8
++        ((self.time.0 >> 5) & 0x3F) as u8
 +    }
 +
 +    /// The second. Always in range [0, 60).
 +    fn second(&self) -> u8 {
-+        (self.date.0 & 0x1F) as u8 * 2
++        (self.time.0 & 0x1F) as u8 * 2
 +    }
 +}
 +
@@ -916,7 +927,7 @@ index 1822cc5..96a70dd 100644
 +    }
 +
 +    pub(super) fn lfn(&self) -> bool {
-+        (self.0 & 0x0F) != 0
++        self.0 == 0x0F
 +    }
 +}
  
@@ -991,13 +1002,13 @@ index 1822cc5..96a70dd 100644
 +}
 \ No newline at end of file
 diff --git a/fat32/src/vfat/mod.rs b/fat32/src/vfat/mod.rs
-index bf5d791..6c073c8 100644
+index eef03f6..e0cccde 100644
 --- a/fat32/src/vfat/mod.rs
 +++ b/fat32/src/vfat/mod.rs
-@@ -21,3 +21,6 @@ pub use self::fat::{Status, FatEntry};
- pub use self::metadata::{Metadata, Attributes, Date, Time, Timestamp};
- pub use self::cache::CachedDevice;
- pub use self::shared::Shared;
+@@ -22,3 +22,6 @@ pub(crate) use self::shared::Shared;
+ pub(crate) use self::cache::{CachedDevice, Partition};
+ pub(crate) use self::fat::{Status, FatEntry};
+ pub(crate) use self::cluster::Cluster;
 +
 +#[cfg(test)]
 +mod tests;
@@ -1085,16 +1096,16 @@ index e69de29..2f4ed60 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index f6a89cc..db5d84e 100644
+index 7059b43..8ec8cbc 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -5,26 +5,47 @@ use std::cmp::min;
+@@ -5,26 +5,53 @@ use std::cmp::min;
  
  use util::SliceExt;
  use mbr::MasterBootRecord;
 -use vfat::{Shared, Cluster, File, Dir, Entry, FatEntry, Error, Status};
 +use vfat::{Cluster, Dir, Entry, Error, FatEntry, File, Shared, Status};
- use vfat::{BiosParameterBlock, CachedDevice};
+ use vfat::{BiosParameterBlock, CachedDevice, Partition};
 -use traits::{FileSystem, BlockDevice};
 +use traits::{BlockDevice, FileSystem};
 +use std::mem::transmute;
@@ -1115,22 +1126,27 @@ index f6a89cc..db5d84e 100644
  }
  
  impl VFat {
--    pub fn from<T>(mut device: T) -> Result<Shared<VFat>, Error>
+     pub fn from<T>(mut device: T) -> Result<Shared<VFat>, Error>
 -        where T: BlockDevice + 'static
-+    pub fn from<T>(device: T) -> Result<Shared<VFat>, Error>
 +    where
 +        T: BlockDevice + 'static,
      {
 -        unimplemented!("VFat::from()")
-+        let mut cached_device = CachedDevice::new(device);
-+        let mbr = MasterBootRecord::from(&mut cached_device)?;
++        let mbr = MasterBootRecord::from(&mut device)?;
 +        let fat_start_sector_option = mbr.first_vfat_partition_lba();
 +        if fat_start_sector_option.is_none() {
 +            return Err(Error::NotFound);
 +        }
 +        let fat_start_sector = fat_start_sector_option.unwrap() as u64;
-+        let ebpb = BiosParameterBlock::from(&mut cached_device, fat_start_sector)?;
++        let ebpb = BiosParameterBlock::from(&mut device, fat_start_sector)?;
 +        let sectors_per_fat = ebpb.sectors_per_fat();
++        let cached_device = CachedDevice::new(
++            device,
++            Partition {
++                start: fat_start_sector,
++                sector_size: ebpb.bytes_per_sector as u64,
++            },
++        );
 +        Ok(Shared::new(VFat {
 +            device: cached_device,
 +            bytes_per_sector: ebpb.bytes_per_sector,
@@ -1144,7 +1160,7 @@ index f6a89cc..db5d84e 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +72,94 @@ impl VFat {
+@@ -51,15 +78,94 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1243,7 +1259,7 @@ index f6a89cc..db5d84e 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +167,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +173,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
@@ -1262,18 +1278,6 @@ index f6a89cc..db5d84e 100644
      {
          unimplemented!("read only file system")
      }
-diff --git a/files/firmware/config.txt b/files/firmware/config.txt
-index e69de29..754bc31 100644
---- a/files/firmware/config.txt
-+++ b/files/firmware/config.txt
-@@ -0,0 +1,4 @@
-+device_tree=
-+start_file=start.elf
-+fixup_file=fixup.dat
-+kernel_address=0x4000000
-diff --git a/files/firmware/fixup.dat b/files/firmware/fixup.dat
-index e69de29..028968d 100644
-Binary files a/files/firmware/fixup.dat and b/files/firmware/fixup.dat differ
 diff --git a/questions/atag-cmdline b/questions/atag-cmdline
 index e69de29..aa5607d 100644
 --- a/questions/atag-cmdline
