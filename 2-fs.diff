@@ -1,12 +1,12 @@
 diff --git a/fat32/src/mbr.rs b/fat32/src/mbr.rs
-index d200c10..b07bf3a 100644
+index d200c10..e9ce240 100644
 --- a/fat32/src/mbr.rs
 +++ b/fat32/src/mbr.rs
-@@ -1,23 +1,37 @@
-+use std::mem::transmute;
+@@ -1,23 +1,38 @@
  use std::{fmt, io};
  
  use traits::BlockDevice;
++use util::SliceExt;
  
  #[repr(C, packed)]
 -#[derive(Copy, Clone)]
@@ -32,6 +32,7 @@ index d200c10..b07bf3a 100644
  
  /// The master boot record (MBR).
  #[repr(C, packed)]
++#[derive(Clone)]
  pub struct MasterBootRecord {
      // FIXME: Fill me in.
 +    __r1: [u8; 436],
@@ -41,7 +42,7 @@ index d200c10..b07bf3a 100644
  }
  
  #[derive(Debug)]
-@@ -40,12 +54,51 @@ impl MasterBootRecord {
+@@ -40,12 +55,51 @@ impl MasterBootRecord {
      /// boot indicator. Returns `Io(err)` if the I/O error `err` occured while
      /// reading the MBR.
      pub fn from<T: BlockDevice>(mut device: T) -> Result<MasterBootRecord, Error> {
@@ -54,7 +55,7 @@ index d200c10..b07bf3a 100644
 +                "unable to read 512 bytes of MBR",
 +            ).into());
 +        } else {
-+            let result: MasterBootRecord = unsafe { transmute(buf) };
++            let result: &MasterBootRecord = unsafe { &buf.cast()[0] };
 +            if result.magic != 0xaa55 {
 +                return Err(Error::BadSignature);
 +            }
@@ -66,7 +67,7 @@ index d200c10..b07bf3a 100644
 +                    return Err(Error::UnknownBootIndicator(i as u8));
 +                }
 +            }
-+            return Ok(result);
++            return Ok(result.clone());
 +        }
 +    }
 +
@@ -267,7 +268,7 @@ index f6d686f..742842f 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..0a2c0c3 100644
+index 9ef83c1..0692a62 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
 @@ -5,30 +5,52 @@ use std::io;
@@ -327,7 +328,7 @@ index 9ef83c1..0a2c0c3 100644
  }
  
  pub union VFatDirEntry {
-@@ -49,8 +71,178 @@ impl Dir {
+@@ -49,8 +71,179 @@ impl Dir {
      /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
      /// is returned.
      pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
@@ -426,8 +427,9 @@ index 9ef83c1..0a2c0c3 100644
 +                    // 0x05 is used for real 0xE5 as first byte
 +                    short_file_name[0] = 0xE5;
 +                }
-+                let name = unsafe { str::from_utf8_unchecked(&short_file_name) }.trim_right();
-+                let ext = unsafe { str::from_utf8_unchecked(&regular_entry.short_file_extension) }
++                let name = str::from_utf8(&short_file_name).unwrap().trim_right();
++                let ext = str::from_utf8(&regular_entry.short_file_extension)
++                    .unwrap()
 +                    .trim_right();
 +                let mut short_name = String::from(name);
 +                if ext.len() > 0 {
@@ -444,7 +446,7 @@ index 9ef83c1..0a2c0c3 100644
 +                if let Some(len) = nul_byte_index {
 +                    long_file_name.truncate(len);
 +                }
-+                let long_name = String::from_utf16_lossy(long_file_name.as_slice());
++                let long_name = String::from_utf16(long_file_name.as_slice()).unwrap();
 +                if regular_entry.metadata.attributes.directory() {
 +                    return Some(Entry::Dir(Dir {
 +                        cluster: Cluster::from(regular_entry.metadata.first_cluster()),
@@ -508,18 +510,18 @@ index 9ef83c1..0a2c0c3 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/ebpb.rs b/fat32/src/vfat/ebpb.rs
-index 2878c6f..3bb117c 100644
+index 2878c6f..660097a 100644
 --- a/fat32/src/vfat/ebpb.rs
 +++ b/fat32/src/vfat/ebpb.rs
-@@ -1,11 +1,42 @@
-+use std::mem::transmute;
- use std::fmt;
+@@ -2,10 +2,42 @@ use std::fmt;
  
  use traits::BlockDevice;
  use vfat::Error;
++use util::SliceExt;
 +use std::io;
  
  #[repr(C, packed)]
++#[derive(Copy, Clone)]
  pub struct BiosParameterBlock {
      // FIXME: Fill me in.
 +    jump_instruction: [u8; 3],
@@ -554,7 +556,7 @@ index 2878c6f..3bb117c 100644
  }
  
  impl BiosParameterBlock {
-@@ -15,16 +46,39 @@ impl BiosParameterBlock {
+@@ -15,16 +47,39 @@ impl BiosParameterBlock {
      /// # Errors
      ///
      /// If the EBPB signature is invalid, returns an error of `BadSignature`.
@@ -573,9 +575,9 @@ index 2878c6f..3bb117c 100644
 +                        "unable to read 512 bytes of EBPB",
 +                    )))
 +                } else {
-+                    let result: BiosParameterBlock = unsafe { transmute(buf) };
++                    let result: &BiosParameterBlock = unsafe { &buf.cast()[0] };
 +                    if result.magic == 0xaa55 {
-+                        Ok(result)
++                        Ok(result.clone())
 +                    } else {
 +                        Err(Error::BadSignature)
 +                    }
@@ -1028,10 +1030,10 @@ index eef03f6..e0cccde 100644
 +#[cfg(test)]
 +mod tests;
 diff --git a/fat32/src/vfat/tests.rs b/fat32/src/vfat/tests.rs
-index e69de29..2f4ed60 100644
+index e69de29..b21aa5d 100644
 --- a/fat32/src/vfat/tests.rs
 +++ b/fat32/src/vfat/tests.rs
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,79 @@
 +use std::fs;
 +use std::io::{Read, Seek, SeekFrom};
 +use std::mem::transmute;
@@ -1039,6 +1041,7 @@ index e69de29..2f4ed60 100644
 +use traits::Entry;
 +use traits::Dir;
 +use traits::File;
++use util::SliceExt;
 +
 +#[test]
 +fn test_raspbian_img_vfat() {
@@ -1050,7 +1053,7 @@ index e69de29..2f4ed60 100644
 +        let root_cluster = vfat.root_dir_cluster;
 +        let mut buffer = Vec::new();
 +        vfat.read_chain(root_cluster, &mut buffer).unwrap();
-+        let entries: &[::vfat::dir::VFatRegularDirEntry] = unsafe { transmute(buffer.as_slice()) };
++        let entries: &[::vfat::dir::VFatRegularDirEntry] = unsafe { buffer.as_slice().cast() };
 +        println!("{:?}", &entries[0..10]);
 +        println!("{:?}", *vfat);
 +    }
@@ -1111,10 +1114,10 @@ index e69de29..2f4ed60 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..8ec8cbc 100644
+index 7059b43..038fb93 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -5,26 +5,53 @@ use std::cmp::min;
+@@ -5,26 +5,52 @@ use std::cmp::min;
  
  use util::SliceExt;
  use mbr::MasterBootRecord;
@@ -1123,7 +1126,6 @@ index 7059b43..8ec8cbc 100644
  use vfat::{BiosParameterBlock, CachedDevice, Partition};
 -use traits::{FileSystem, BlockDevice};
 +use traits::{BlockDevice, FileSystem};
-+use std::mem::transmute;
 +use std::path::Component;
  
  #[derive(Debug)]
@@ -1175,7 +1177,7 @@ index 7059b43..8ec8cbc 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +78,94 @@ impl VFat {
+@@ -51,15 +77,94 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1186,7 +1188,7 @@ index 7059b43..8ec8cbc 100644
 +        let entry_offset: usize =
 +            cluster.cluster_num() as usize * size_of::<FatEntry>() % self.bytes_per_sector as usize;
 +        let content = self.device.get(self.fat_start_sector + cluster_num_sector)?;
-+        let entries: &[FatEntry] = unsafe { transmute(content) };
++        let entries: &[FatEntry] = unsafe { content.cast() };
 +        Ok(&entries[entry_offset / size_of::<FatEntry>()])
 +    }
 +
@@ -1274,7 +1276,7 @@ index 7059b43..8ec8cbc 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +173,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +172,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
@@ -1313,6 +1315,12 @@ index e69de29..c977762 100644
 +++ b/questions/enduser-unsafe
 @@ -0,0 +1 @@
 +We can limit `unsafe' to only a small portion of code that we can easily check, leaving rest of the code safe Rust. It's hard to enforce the same constraint in C.
+diff --git a/questions/lfn-identity b/questions/lfn-identity
+index e69de29..9a44fbb 100644
+--- a/questions/lfn-identity
++++ b/questions/lfn-identity
+@@ -0,0 +1 @@
++The attribute field is shared among regular entry and lfn entry. But a latter one has 0x0F in this field, which is impossible for a former one.
 diff --git a/questions/libc-align b/questions/libc-align
 index e69de29..812b49e 100644
 --- a/questions/libc-align
@@ -1325,6 +1333,21 @@ index e69de29..d8c8b91 100644
 +++ b/questions/ll-alloc
 @@ -0,0 +1 @@
 +It saves the list pointers in place. Because we are implementing the allocator, it's hard to dynamically allocate some space for storing the linked list.
+diff --git a/questions/manual-lookup b/questions/manual-lookup
+index e69de29..ec87f2c 100644
+--- a/questions/manual-lookup
++++ b/questions/manual-lookup
+@@ -0,0 +1,4 @@
++To get /a/b/c.txt:
++Get root directory, from its entries, find one dir nameb a;
++Use /a, from its entries, find one dir named b;
++Use /a/b, from its entries, find one file named c.txt.
+diff --git a/questions/mbr-magic b/questions/mbr-magic
+index e69de29..821e7eb 100644
+--- a/questions/mbr-magic
++++ b/questions/mbr-magic
+@@ -0,0 +1 @@
++Last two bytes should be 0x55, 0xAA.
 diff --git a/questions/onus b/questions/onus
 index e69de29..86c3e80 100644
 --- a/questions/onus
