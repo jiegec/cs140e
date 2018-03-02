@@ -264,7 +264,7 @@ index 28384f2..6c0e27a 100644
      }
  }
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
-index e8741cf..dd66933 100644
+index e8741cf..d724cb4 100644
 --- a/kernel/src/allocator/bump.rs
 +++ b/kernel/src/allocator/bump.rs
 @@ -13,7 +13,10 @@ impl Allocator {
@@ -290,7 +290,7 @@ index e8741cf..dd66933 100644
 +            return Err(AllocErr::Exhausted { request: layout });
 +        }
 +
-+        if cfg!(dev) {
++        if !cfg!(test) {
 +            use console::noblock_kprintln;
 +            noblock_kprintln!(
 +                "Allocating buffer from {} to {}",
@@ -312,7 +312,7 @@ index e8741cf..dd66933 100644
 -        unimplemented!("bump deallocation")
 +    pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
 +        // Do nothing
-+        if cfg!(dev) {
++        if !cfg!(test) {
 +            use console::noblock_kprintln;
 +            noblock_kprintln!(
 +                "Deallocating buffer from {} to {}",
@@ -323,18 +323,9 @@ index e8741cf..dd66933 100644
      }
  }
 diff --git a/kernel/src/allocator/mod.rs b/kernel/src/allocator/mod.rs
-index f82206d..5d3c145 100644
+index f82206d..95c44b7 100644
 --- a/kernel/src/allocator/mod.rs
 +++ b/kernel/src/allocator/mod.rs
-@@ -1,7 +1,7 @@
- mod linked_list;
- mod util;
- 
--#[path = "bump.rs"]
-+#[path = "bin.rs"]
- mod imp;
- 
- #[cfg(test)]
 @@ -10,6 +10,7 @@ mod tests;
  use mutex::Mutex;
  use alloc::heap::{Alloc, AllocErr, Layout};
@@ -520,18 +511,32 @@ index e0f18f9..35609c1 100644
 +    _noblock_print(format_args!($($arg)*))
 +}
 diff --git a/kernel/src/fs/mod.rs b/kernel/src/fs/mod.rs
-index 593bb50..90363d5 100644
+index 593bb50..3258ff0 100644
 --- a/kernel/src/fs/mod.rs
 +++ b/kernel/src/fs/mod.rs
-@@ -26,8 +26,43 @@ impl FileSystem {
+@@ -3,12 +3,14 @@ pub mod sd;
+ use std::io;
+ use std::path::Path;
+ 
+-use fat32::vfat::{self, Shared, VFat};
++use fat32::vfat::{Shared, VFat};
++use console::kprintln;
+ pub use fat32::traits;
+ 
+ use mutex::Mutex;
+ use self::sd::Sd;
+ 
++#[derive(Debug)]
+ pub struct FileSystem(Mutex<Option<Shared<VFat>>>);
+ 
+ impl FileSystem {
+@@ -26,8 +28,41 @@ impl FileSystem {
      ///
      /// Panics if the underlying disk or file sytem failed to initialize.
      pub fn initialize(&self) {
 -        unimplemented!("FileSystem::initialize()")
-+        self.0.lock().get_or_insert_with(|| {
-+            let sd = Sd::new().unwrap();
-+            VFat::from(sd).unwrap()
-+        });
++        *self.0.lock() = Some(VFat::from(Sd::new().unwrap()).unwrap());
++        kprintln!("Got fs!");
      }
  }
  
@@ -569,27 +574,25 @@ index 593bb50..90363d5 100644
 +    }
 +}
 diff --git a/kernel/src/fs/sd.rs b/kernel/src/fs/sd.rs
-index bacfd2b..3ba882e 100644
+index 0eb2632..d81b249 100644
 --- a/kernel/src/fs/sd.rs
 +++ b/kernel/src/fs/sd.rs
-@@ -1,7 +1,9 @@
+@@ -1,5 +1,8 @@
 +use pi::timer::spin_sleep_us;
++use pi::timer::spin_sleep_ms;
  use std::io;
-+use std::io::Read;
  use fat32::traits::BlockDevice;
++use console::{kprint, kprintln};
  
--extern {
-+extern "C" {
+ extern "C" {
      /// A global representing the last SD controller error that occured.
-     static sd_err: i64;
- 
-@@ -28,19 +30,58 @@ extern {
+@@ -28,19 +31,54 @@ extern "C" {
  // FIXME: Define a `#[no_mangle]` `wait_micros` function for use by `libsd`.
  // The `wait_micros` C signature is: `void wait_micros(unsigned int);`
  
 +#[no_mangle]
 +pub extern "C" fn wait_micros(micros: u32) {
-+    spin_sleep_us(micros.into());
++    spin_sleep_us((micros * 100).into());
 +}
 +
  #[derive(Debug)]
@@ -597,25 +600,13 @@ index bacfd2b..3ba882e 100644
      // FIXME: Fill me in.
 +    TimedOut,
 +    SendingCommandFailed,
-+    SdError(i64),
++    UnknownError(i64),
  }
  
  /// A handle to an SD card controller.
  #[derive(Debug)]
  pub struct Sd;
  
-+fn check_error(result: i32) -> Result<i32, Error> {
-+    if result >= 0 {
-+        Ok(result)
-+    } else if result == -1 {
-+        Err(Error::TimedOut)
-+    } else if result == -2 {
-+        Err(Error::SendingCommandFailed)
-+    } else {
-+        Err(Error::SdError(unsafe { sd_err }))
-+    }
-+}
-+
 +impl From<Error> for io::Error {
 +    fn from(err: Error) -> io::Error {
 +        match err {
@@ -626,9 +617,10 @@ index bacfd2b..3ba882e 100644
 +                io::ErrorKind::Other,
 +                "Sending command to SD card controller failed",
 +            ),
-+            Error::SdError(err) => {
-+                io::Error::new(io::ErrorKind::Other, format!("Got SD card error: {}", err))
-+            }
++            Error::UnknownError(err) => io::Error::new(
++                io::ErrorKind::Other,
++                format!("Got unknown card error: {}", err),
++            ),
 +        }
 +    }
 +}
@@ -638,16 +630,24 @@ index bacfd2b..3ba882e 100644
      pub fn new() -> Result<Sd, Error> {
 -        unimplemented!("Sd::new()")
 +        let result = unsafe { sd_init() };
-+        check_error(result)?;
-+        Ok(Sd {})
++        if result == 0 {
++            Ok(Sd {})
++        } else if result == -1 {
++            Err(Error::TimedOut)
++        } else if result == -2 {
++            Err(Error::SendingCommandFailed)
++        } else {
++            Err(Error::UnknownError(unsafe { sd_err }))
++        }
      }
  }
  
-@@ -58,7 +99,16 @@ impl BlockDevice for Sd {
+@@ -58,7 +96,29 @@ impl BlockDevice for Sd {
      ///
      /// An error of kind `Other` is returned for all other errors.
      fn read_sector(&mut self, n: u64, buf: &mut [u8]) -> io::Result<usize> {
 -        unimplemented!("Sd::read_sector()")
++        kprintln!("read_sector: {}, {}", n, buf.len());
 +        if buf.len() < 512 || n > 0x7FFFFFFF {
 +            return Err(io::Error::new(
 +                io::ErrorKind::InvalidInput,
@@ -655,14 +655,26 @@ index bacfd2b..3ba882e 100644
 +            ));
 +        }
 +        let mut buffer = [0u8; 512];
-+        let result = unsafe { sd_readsector(n as i32, (&mut buffer).as_mut_ptr()) };
-+        let bytes_read = check_error(result)? as usize;
-+        io::Cursor::new(&buffer[0..bytes_read]).read(buf)
++        let result = unsafe { sd_readsector(n as i32, buffer.as_mut_ptr()) };
++        kprintln!("{} bytes are read", result);
++        if result > 0 {
++            buf.copy_from_slice(&mut buffer);
++            Ok(result as usize)
++        } else {
++            let errno = unsafe { sd_err };
++            if errno == -1 {
++                Err(Error::TimedOut.into())
++            } else if errno == -2 {
++                Err(Error::SendingCommandFailed.into())
++            } else {
++                Err(Error::UnknownError(errno).into())
++            }
++        }
      }
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index 2a3f2fa..2a79b0b 100644
+index 2a3f2fa..a92de3f 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -686,7 +698,7 @@ index 2a3f2fa..2a79b0b 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -32,9 +37,52 @@ use fs::FileSystem;
+@@ -32,9 +37,54 @@ use fs::FileSystem;
  pub static ALLOCATOR: Allocator = Allocator::uninitialized();
  
  pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
@@ -732,6 +744,8 @@ index 2a3f2fa..2a79b0b 100644
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
++    spin_sleep_ms(200);
++    FILE_SYSTEM.initialize();
 +    // FIXME: Start the shell.
 +    // blinky();
 +    // echo();
@@ -829,7 +843,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..2aea6d4 100644
+index 03fb8fb..ab61c3f 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,43 @@
@@ -841,7 +855,7 @@ index 03fb8fb..2aea6d4 100644
 +#[cfg(not(test))]
 +use ALLOCATOR;
 +use FILE_SYSTEM;
-+use fat32::traits::{Dir, Entry, File, FileSystem};
++use fat32::traits::{Dir, Entry, FileSystem};
 +use std::io::Read;
  
  /// Error type for `Command` parse failures.
@@ -893,7 +907,7 @@ index 03fb8fb..2aea6d4 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +63,294 @@ impl<'a> Command<'a> {
+@@ -36,12 +63,295 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -1134,6 +1148,7 @@ index 03fb8fb..2aea6d4 100644
 +}
 +
 +fn ls(_command: &Command, cwd: &Path) {
++    kprintln!("fs: {:?}", FILE_SYSTEM);
 +    let dir_option = match FILE_SYSTEM.open(cwd) {
 +        Ok(entry) => entry.into_dir(),
 +        Err(err) => {
@@ -1156,7 +1171,7 @@ index 03fb8fb..2aea6d4 100644
 +
 +fn cd(command: &Command, cwd: &mut PathBuf) {
 +    if command.args.len() != 1 {
-+        kprintln!("Too many args for cd");
++        kprintln!("Wrong number of args for cd");
 +        return;
 +    }
 +    cwd.push(command.args[1]);
@@ -1180,7 +1195,7 @@ index 03fb8fb..2aea6d4 100644
 +            Some(mut file) => {
 +                let mut contents = String::new();
 +                match file.read_to_string(&mut contents) {
-+                    Ok(size) => kprintln!("{}", contents),
++                    Ok(_) => kprintln!("{}", contents),
 +                    Err(err) => kprintln!("Error reading file: {}", err),
 +                }
 +            }

@@ -97,10 +97,10 @@ index d200c10..e9ce240 100644
      }
  }
 diff --git a/fat32/src/tests.rs b/fat32/src/tests.rs
-index 1f91f15..8fcd2a3 100644
+index c896a42..a6f3ebb 100644
 --- a/fat32/src/tests.rs
 +++ b/fat32/src/tests.rs
-@@ -6,9 +6,14 @@ use vfat::{Shared, VFat, BiosParameterBlock};
+@@ -8,9 +8,14 @@ use vfat::{Shared, VFat, BiosParameterBlock};
  use mbr::{MasterBootRecord, CHS, PartitionEntry};
  use traits::*;
  
@@ -118,7 +118,7 @@ index 1f91f15..8fcd2a3 100644
  }
  
  macro expect_variant($e:expr, $variant:pat $(if $($cond:tt)*)*) {
-@@ -320,6 +325,6 @@ fn test_mock3_files_recursive() {
+@@ -346,6 +351,6 @@ fn test_mock4_files_recursive() {
  
  #[test]
  fn shared_fs_is_sync_send_static() {
@@ -1114,7 +1114,7 @@ index e69de29..b21aa5d 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..038fb93 100644
+index 7059b43..fcbe4fb 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
 @@ -5,26 +5,52 @@ use std::cmp::min;
@@ -1151,10 +1151,10 @@ index 7059b43..038fb93 100644
 -        unimplemented!("VFat::from()")
 +        let mbr = MasterBootRecord::from(&mut device)?;
 +        let fat_start_sector_option = mbr.first_vfat_partition_lba();
-+        if fat_start_sector_option.is_none() {
-+            return Err(Error::NotFound);
-+        }
-+        let fat_start_sector = fat_start_sector_option.unwrap() as u64;
++        let fat_start_sector = match fat_start_sector_option {
++            Some(sector) => sector as u64,
++            None => return Err(Error::NotFound)
++        };
 +        let ebpb = BiosParameterBlock::from(&mut device, fat_start_sector)?;
 +        let sectors_per_fat = ebpb.sectors_per_fat();
 +        let cached_device = CachedDevice::new(
