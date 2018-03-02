@@ -1114,7 +1114,7 @@ index e69de29..b21aa5d 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..fcbe4fb 100644
+index 7059b43..681550b 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
 @@ -5,26 +5,52 @@ use std::cmp::min;
@@ -1153,7 +1153,7 @@ index 7059b43..fcbe4fb 100644
 +        let fat_start_sector_option = mbr.first_vfat_partition_lba();
 +        let fat_start_sector = match fat_start_sector_option {
 +            Some(sector) => sector as u64,
-+            None => return Err(Error::NotFound)
++            None => return Err(Error::NotFound),
 +        };
 +        let ebpb = BiosParameterBlock::from(&mut device, fat_start_sector)?;
 +        let sectors_per_fat = ebpb.sectors_per_fat();
@@ -1177,7 +1177,7 @@ index 7059b43..fcbe4fb 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +77,94 @@ impl VFat {
+@@ -51,15 +77,95 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1204,12 +1204,13 @@ index 7059b43..fcbe4fb 100644
 +            self.bytes_per_sector as usize * self.sectors_per_cluster as usize - offset,
 +        );
 +        let mut current_sector = self.data_start_sector
-+            + cluster.cluster_index() as u64 * self.sectors_per_cluster as u64;
++            + cluster.cluster_index() as u64 * self.sectors_per_cluster as u64
++            + offset as u64 / self.bytes_per_sector as u64;
 +        let mut bytes_read = 0;
-+        let mut offset_once = offset;
++        let mut offset_once = offset % self.bytes_per_sector as usize;
 +        while bytes_read < size {
 +            let content = self.device.get(current_sector)?;
-+            let copy_size = min(size - bytes_read, sector_size);
++            let copy_size = min(size - bytes_read, sector_size - offset_once);
 +            buf[bytes_read..bytes_read + copy_size]
 +                .copy_from_slice(&content[offset_once..offset_once + copy_size]);
 +            offset_once = 0;
@@ -1276,7 +1277,7 @@ index 7059b43..fcbe4fb 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +172,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +173,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
