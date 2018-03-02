@@ -122,7 +122,7 @@ index e69de29..2dd73f2 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
-index e2aee8b..dbe2f3c 100644
+index 8dac76f..20a635b 100644
 --- a/kernel/Cargo.toml
 +++ b/kernel/Cargo.toml
 @@ -9,7 +9,6 @@ path = "src/kmain.rs"
@@ -134,7 +134,7 @@ index e2aee8b..dbe2f3c 100644
  
  [profile.test]
 diff --git a/kernel/Makefile b/kernel/Makefile
-index c61963e..48b2c79 100644
+index 3572bad..1ba62a0 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
 @@ -3,7 +3,7 @@ CROSS ?= $(TARGET)
@@ -520,7 +520,7 @@ index e0f18f9..35609c1 100644
 +    _noblock_print(format_args!($($arg)*))
 +}
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index 471db36..fedb2d7 100644
+index 2a3f2fa..2a79b0b 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -531,8 +531,8 @@ index 471db36..fedb2d7 100644
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
  #![feature(alloc, allocator_api, global_allocator)]
-@@ -16,6 +15,12 @@ extern crate pi;
- extern crate stack_vec;
+@@ -17,6 +16,12 @@ extern crate stack_vec;
+ extern crate fat32;
  
  pub mod allocator;
 +use pi::gpio::Gpio;
@@ -544,10 +544,10 @@ index 471db36..fedb2d7 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -28,8 +33,52 @@ use allocator::Allocator;
- #[global_allocator]
+@@ -32,9 +37,52 @@ use fs::FileSystem;
  pub static ALLOCATOR: Allocator = Allocator::uninitialized();
  
+ pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
 +use console::{kprintln, CONSOLE};
 +
 +fn blinky() {
@@ -585,7 +585,7 @@ index 471db36..fedb2d7 100644
 +        console.write_fmt(format_args!("{:#X}", byte)).unwrap();
 +    }
 +}
-+
+ 
  #[no_mangle]
  #[cfg(not(test))]
  pub extern "C" fn kmain() {

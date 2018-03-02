@@ -1019,10 +1019,10 @@ index 1822cc5..d9cc110 100644
 +}
 \ No newline at end of file
 diff --git a/fat32/src/vfat/mod.rs b/fat32/src/vfat/mod.rs
-index eef03f6..e0cccde 100644
+index 82527ae..d7951be 100644
 --- a/fat32/src/vfat/mod.rs
 +++ b/fat32/src/vfat/mod.rs
-@@ -22,3 +22,6 @@ pub(crate) use self::shared::Shared;
+@@ -22,3 +22,6 @@ pub use self::shared::Shared;
  pub(crate) use self::cache::{CachedDevice, Partition};
  pub(crate) use self::fat::{Status, FatEntry};
  pub(crate) use self::cluster::Cluster;
