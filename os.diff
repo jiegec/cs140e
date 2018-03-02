@@ -519,6 +519,148 @@ index e0f18f9..35609c1 100644
 +pub macro noblock_kprint($($arg:tt)*) {
 +    _noblock_print(format_args!($($arg)*))
 +}
+diff --git a/kernel/src/fs/mod.rs b/kernel/src/fs/mod.rs
+index 593bb50..90363d5 100644
+--- a/kernel/src/fs/mod.rs
++++ b/kernel/src/fs/mod.rs
+@@ -26,8 +26,43 @@ impl FileSystem {
+     ///
+     /// Panics if the underlying disk or file sytem failed to initialize.
+     pub fn initialize(&self) {
+-        unimplemented!("FileSystem::initialize()")
++        self.0.lock().get_or_insert_with(|| {
++            let sd = Sd::new().unwrap();
++            VFat::from(sd).unwrap()
++        });
+     }
+ }
+ 
+ // FIXME: Implement `fat32::traits::FileSystem` for a useful type.
++impl<'a> traits::FileSystem for &'a FileSystem {
++    type File = <&'a Shared<VFat> as traits::FileSystem>::File;
++    type Dir = <&'a Shared<VFat> as traits::FileSystem>::Dir;
++    type Entry = <&'a Shared<VFat> as traits::FileSystem>::Entry;
++
++    fn open<P: AsRef<Path>>(self, path: P) -> io::Result<Self::Entry> {
++        self.0.lock().as_ref().unwrap().open(path)
++    }
++
++    fn create_file<P: AsRef<Path>>(self, path: P) -> io::Result<Self::File> {
++        self.0.lock().as_ref().unwrap().create_file(path)
++    }
++
++    fn create_dir<P>(self, path: P, parents: bool) -> io::Result<Self::Dir>
++    where
++        P: AsRef<Path>,
++    {
++        self.0.lock().as_ref().unwrap().create_dir(path, parents)
++    }
++
++    fn rename<P, Q>(self, from: P, to: Q) -> io::Result<()>
++    where
++        P: AsRef<Path>,
++        Q: AsRef<Path>,
++    {
++        self.0.lock().as_ref().unwrap().rename(from, to)
++    }
++
++    fn remove<P: AsRef<Path>>(self, path: P, children: bool) -> io::Result<()> {
++        self.0.lock().as_ref().unwrap().remove(path, children)
++    }
++}
+diff --git a/kernel/src/fs/sd.rs b/kernel/src/fs/sd.rs
+index bacfd2b..3ba882e 100644
+--- a/kernel/src/fs/sd.rs
++++ b/kernel/src/fs/sd.rs
+@@ -1,7 +1,9 @@
++use pi::timer::spin_sleep_us;
+ use std::io;
++use std::io::Read;
+ use fat32::traits::BlockDevice;
+ 
+-extern {
++extern "C" {
+     /// A global representing the last SD controller error that occured.
+     static sd_err: i64;
+ 
+@@ -28,19 +30,58 @@ extern {
+ // FIXME: Define a `#[no_mangle]` `wait_micros` function for use by `libsd`.
+ // The `wait_micros` C signature is: `void wait_micros(unsigned int);`
+ 
++#[no_mangle]
++pub extern "C" fn wait_micros(micros: u32) {
++    spin_sleep_us(micros.into());
++}
++
+ #[derive(Debug)]
+ pub enum Error {
+     // FIXME: Fill me in.
++    TimedOut,
++    SendingCommandFailed,
++    SdError(i64),
+ }
+ 
+ /// A handle to an SD card controller.
+ #[derive(Debug)]
+ pub struct Sd;
+ 
++fn check_error(result: i32) -> Result<i32, Error> {
++    if result >= 0 {
++        Ok(result)
++    } else if result == -1 {
++        Err(Error::TimedOut)
++    } else if result == -2 {
++        Err(Error::SendingCommandFailed)
++    } else {
++        Err(Error::SdError(unsafe { sd_err }))
++    }
++}
++
++impl From<Error> for io::Error {
++    fn from(err: Error) -> io::Error {
++        match err {
++            Error::TimedOut => {
++                io::Error::new(io::ErrorKind::TimedOut, "SD card operation timed out")
++            }
++            Error::SendingCommandFailed => io::Error::new(
++                io::ErrorKind::Other,
++                "Sending command to SD card controller failed",
++            ),
++            Error::SdError(err) => {
++                io::Error::new(io::ErrorKind::Other, format!("Got SD card error: {}", err))
++            }
++        }
++    }
++}
++
+ impl Sd {
+     /// Initializes the SD card controller and returns a handle to it.
+     pub fn new() -> Result<Sd, Error> {
+-        unimplemented!("Sd::new()")
++        let result = unsafe { sd_init() };
++        check_error(result)?;
++        Ok(Sd {})
+     }
+ }
+ 
+@@ -58,7 +99,16 @@ impl BlockDevice for Sd {
+     ///
+     /// An error of kind `Other` is returned for all other errors.
+     fn read_sector(&mut self, n: u64, buf: &mut [u8]) -> io::Result<usize> {
+-        unimplemented!("Sd::read_sector()")
++        if buf.len() < 512 || n > 0x7FFFFFFF {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "read_sector received wrong parameter",
++            ));
++        }
++        let mut buffer = [0u8; 512];
++        let result = unsafe { sd_readsector(n as i32, (&mut buffer).as_mut_ptr()) };
++        let bytes_read = check_error(result)? as usize;
++        io::Cursor::new(&buffer[0..bytes_read]).read(buf)
+     }
+ 
+     fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
 index 2a3f2fa..2a79b0b 100644
 --- a/kernel/src/kmain.rs
@@ -687,17 +829,20 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..aff589b 100644
+index 03fb8fb..2aea6d4 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,40 @@
+@@ -1,16 +1,43 @@
 -use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
-+use std::str;
++use std::path::{Path, PathBuf};
 +use pi::timer::{current_time, spin_sleep_ms};
 +use pi::atags::Atags;
 +#[cfg(not(test))]
 +use ALLOCATOR;
++use FILE_SYSTEM;
++use fat32::traits::{Dir, Entry, File, FileSystem};
++use std::io::Read;
  
  /// Error type for `Command` parse failures.
  #[derive(Debug)]
@@ -734,7 +879,7 @@ index 03fb8fb..aff589b 100644
  }
  
  impl<'a> Command<'a> {
-@@ -21,10 +45,10 @@ impl<'a> Command<'a> {
+@@ -21,10 +48,10 @@ impl<'a> Command<'a> {
      ///
      /// If `s` contains no arguments, returns `Error::Empty`. If there are more
      /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
@@ -748,7 +893,7 @@ index 03fb8fb..aff589b 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +60,229 @@ impl<'a> Command<'a> {
+@@ -36,12 +63,294 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -765,8 +910,9 @@ index 03fb8fb..aff589b 100644
 +    kprintln!("{}", BANNER);
 +
 +    let mut history = Vec::new();
++    let mut cwd = PathBuf::from("/");
 +    loop {
-+        kprint!("{}", prefix);
++        kprint!("{}{}", cwd.display(), prefix);
 +
 +        let line = read_line(&mut history);
 +        match Command::parse(&line) {
@@ -774,11 +920,15 @@ index 03fb8fb..aff589b 100644
 +                let path = command.path();
 +                match path {
 +                    "atags" => atags(&command),
++                    "cat" => cat(&command, cwd.as_path()),
++                    "cd" => cd(&command, &mut cwd),
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => exit(&command),
++                    "ls" => ls(&command, cwd.as_path()),
 +                    "memstat" => memstat(&command),
 +                    "panic" => panic(&command),
++                    "pwd" => pwd(&command, cwd.as_path()),
 +                    "uptime" => uptime(&command),
 +                    _ => kprintln!("unknown command: {}", path),
 +                }
@@ -954,7 +1104,9 @@ index 03fb8fb..aff589b 100644
 +}
 +
 +fn exit(_command: &Command) -> ! {
-+    kprintln!("Might be dangerous: bootloader might be corrupted, especially when using bin allocator.");
++    kprintln!(
++        "Might be dangerous: bootloader might be corrupted, especially when using bin allocator."
++    );
 +    kprintln!("Now exiting to bootloader. Detach and send a new kernel to continue.");
 +    // in line with bootloader
 +    const BOOTLOADER_START_ADDR: usize = 0x4000000;
@@ -979,6 +1131,64 @@ index 03fb8fb..aff589b 100644
 +fn memstat(_command: &Command) {
 +    #[cfg(not(test))]
 +    kprintln!("Allocator: {:?}", ALLOCATOR);
++}
++
++fn ls(_command: &Command, cwd: &Path) {
++    let dir_option = match FILE_SYSTEM.open(cwd) {
++        Ok(entry) => entry.into_dir(),
++        Err(err) => {
++            kprintln!("Error: {}", err);
++            return;
++        }
++    };
++    match dir_option {
++        Some(dir) => match dir.entries() {
++            Ok(entries) => for entry in entries {
++                kprintln!("{}", entry.name());
++            },
++            Err(err) => kprintln!("Error listing dir: {}", err),
++        },
++        None => {
++            kprintln!("Not a dir!");
++        }
++    }
++}
++
++fn cd(command: &Command, cwd: &mut PathBuf) {
++    if command.args.len() != 1 {
++        kprintln!("Too many args for cd");
++        return;
++    }
++    cwd.push(command.args[1]);
++}
++
++fn pwd(_command: &Command, cwd: &Path) {
++    kprintln!("{}", cwd.display());
++}
++
++fn cat(command: &Command, cwd: &Path) {
++    for files in &command.args[1..] {
++        let file = cwd.join(files);
++        let file_option = match FILE_SYSTEM.open(file) {
++            Ok(entry) => entry.into_file(),
++            Err(err) => {
++                kprintln!("Error: {}", err);
++                continue;
++            }
++        };
++        match file_option {
++            Some(mut file) => {
++                let mut contents = String::new();
++                match file.read_to_string(&mut contents) {
++                    Ok(size) => kprintln!("{}", contents),
++                    Err(err) => kprintln!("Error reading file: {}", err),
++                }
++            }
++            None => {
++                kprintln!("Not a file!");
++            }
++        }
++    }
  }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
