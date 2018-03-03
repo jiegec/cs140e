@@ -1,16 +1,16 @@
 diff --git a/fat32/src/mbr.rs b/fat32/src/mbr.rs
-index d200c10..e9ce240 100644
+index d200c10..32459af 100644
 --- a/fat32/src/mbr.rs
 +++ b/fat32/src/mbr.rs
-@@ -1,23 +1,38 @@
+@@ -1,23 +1,39 @@
  use std::{fmt, io};
  
  use traits::BlockDevice;
-+use util::SliceExt;
++use std::mem::{transmute_copy, align_of};
++
  
  #[repr(C, packed)]
--#[derive(Copy, Clone)]
-+#[derive(Debug, Copy, Clone)]
+ #[derive(Copy, Clone)]
  pub struct CHS {
      // FIXME: Fill me in.
 +    head: u8,
@@ -31,8 +31,9 @@ index d200c10..e9ce240 100644
  }
  
  /// The master boot record (MBR).
- #[repr(C, packed)]
-+#[derive(Clone)]
+-#[repr(C, packed)]
++// In some platforms, a u32 must be aligned to 4-byte boundary
++#[repr(C, align(512))]
  pub struct MasterBootRecord {
      // FIXME: Fill me in.
 +    __r1: [u8; 436],
@@ -42,7 +43,7 @@ index d200c10..e9ce240 100644
  }
  
  #[derive(Debug)]
-@@ -40,12 +55,51 @@ impl MasterBootRecord {
+@@ -40,12 +56,57 @@ impl MasterBootRecord {
      /// boot indicator. Returns `Io(err)` if the I/O error `err` occured while
      /// reading the MBR.
      pub fn from<T: BlockDevice>(mut device: T) -> Result<MasterBootRecord, Error> {
@@ -55,7 +56,7 @@ index d200c10..e9ce240 100644
 +                "unable to read 512 bytes of MBR",
 +            ).into());
 +        } else {
-+            let result: &MasterBootRecord = unsafe { &buf.cast()[0] };
++            let result: MasterBootRecord = unsafe { transmute_copy(&buf) };
 +            if result.magic != 0xaa55 {
 +                return Err(Error::BadSignature);
 +            }
@@ -67,7 +68,7 @@ index d200c10..e9ce240 100644
 +                    return Err(Error::UnknownBootIndicator(i as u8));
 +                }
 +            }
-+            return Ok(result.clone());
++            return Ok(result);
 +        }
 +    }
 +
@@ -94,6 +95,12 @@ index d200c10..e9ce240 100644
 +impl From<io::Error> for Error {
 +    fn from(err: io::Error) -> Self {
 +        Error::Io(err)
++    }
++}
++
++impl fmt::Debug for CHS {
++    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
++        fmt.debug_struct("CHS").finish()
      }
  }
 diff --git a/fat32/src/tests.rs b/fat32/src/tests.rs

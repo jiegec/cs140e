@@ -264,7 +264,7 @@ index 28384f2..6c0e27a 100644
      }
  }
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
-index e8741cf..d724cb4 100644
+index e8741cf..02ae36e 100644
 --- a/kernel/src/allocator/bump.rs
 +++ b/kernel/src/allocator/bump.rs
 @@ -13,7 +13,10 @@ impl Allocator {
@@ -279,7 +279,7 @@ index e8741cf..d724cb4 100644
      }
  
      /// Allocates memory. Returns a pointer meeting the size and alignment
-@@ -37,7 +40,23 @@ impl Allocator {
+@@ -37,7 +40,14 @@ impl Allocator {
      /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
      /// size or alignment constraints (`AllocError::Unsupported`).
      pub fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
@@ -290,42 +290,32 @@ index e8741cf..d724cb4 100644
 +            return Err(AllocErr::Exhausted { request: layout });
 +        }
 +
-+        if !cfg!(test) {
-+            use console::noblock_kprintln;
-+            noblock_kprintln!(
-+                "Allocating buffer from {} to {}",
-+                new_start - layout.size(),
-+                new_start
-+            );
-+        }
-+
 +        self.current = new_start;
 +        Ok((new_start - layout.size()) as *mut u8)
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -53,7 +72,15 @@ impl Allocator {
-     ///
+@@ -54,6 +64,6 @@ impl Allocator {
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
--    pub fn dealloc(&mut self, _ptr: *mut u8, _layout: Layout) {
+     pub fn dealloc(&mut self, _ptr: *mut u8, _layout: Layout) {
 -        unimplemented!("bump deallocation")
-+    pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
 +        // Do nothing
-+        if !cfg!(test) {
-+            use console::noblock_kprintln;
-+            noblock_kprintln!(
-+                "Deallocating buffer from {} to {}",
-+                ptr as usize,
-+                ptr as usize + layout.size()
-+            );
-+        }
      }
  }
 diff --git a/kernel/src/allocator/mod.rs b/kernel/src/allocator/mod.rs
-index f82206d..95c44b7 100644
+index f82206d..5d3c145 100644
 --- a/kernel/src/allocator/mod.rs
 +++ b/kernel/src/allocator/mod.rs
+@@ -1,7 +1,7 @@
+ mod linked_list;
+ mod util;
+ 
+-#[path = "bump.rs"]
++#[path = "bin.rs"]
+ mod imp;
+ 
+ #[cfg(test)]
 @@ -10,6 +10,7 @@ mod tests;
  use mutex::Mutex;
  use alloc::heap::{Alloc, AllocErr, Layout};
@@ -574,19 +564,15 @@ index 593bb50..3258ff0 100644
 +    }
 +}
 diff --git a/kernel/src/fs/sd.rs b/kernel/src/fs/sd.rs
-index 0eb2632..d81b249 100644
+index 0eb2632..0a59d14 100644
 --- a/kernel/src/fs/sd.rs
 +++ b/kernel/src/fs/sd.rs
-@@ -1,5 +1,8 @@
+@@ -1,3 +1,4 @@
 +use pi::timer::spin_sleep_us;
-+use pi::timer::spin_sleep_ms;
  use std::io;
  use fat32::traits::BlockDevice;
-+use console::{kprint, kprintln};
  
- extern "C" {
-     /// A global representing the last SD controller error that occured.
-@@ -28,19 +31,54 @@ extern "C" {
+@@ -28,19 +29,54 @@ extern "C" {
  // FIXME: Define a `#[no_mangle]` `wait_micros` function for use by `libsd`.
  // The `wait_micros` C signature is: `void wait_micros(unsigned int);`
  
@@ -642,23 +628,19 @@ index 0eb2632..d81b249 100644
      }
  }
  
-@@ -58,7 +96,29 @@ impl BlockDevice for Sd {
+@@ -58,7 +94,25 @@ impl BlockDevice for Sd {
      ///
      /// An error of kind `Other` is returned for all other errors.
      fn read_sector(&mut self, n: u64, buf: &mut [u8]) -> io::Result<usize> {
 -        unimplemented!("Sd::read_sector()")
-+        kprintln!("read_sector: {}, {}", n, buf.len());
 +        if buf.len() < 512 || n > 0x7FFFFFFF {
 +            return Err(io::Error::new(
 +                io::ErrorKind::InvalidInput,
 +                "read_sector received wrong parameter",
 +            ));
 +        }
-+        let mut buffer = [0u8; 512];
-+        let result = unsafe { sd_readsector(n as i32, buffer.as_mut_ptr()) };
-+        kprintln!("{} bytes are read", result);
++        let result = unsafe { sd_readsector(n as i32, buf.as_mut_ptr()) };
 +        if result > 0 {
-+            buf.copy_from_slice(&mut buffer);
 +            Ok(result as usize)
 +        } else {
 +            let errno = unsafe { sd_err };
@@ -843,7 +825,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..ab61c3f 100644
+index 03fb8fb..16f51c8 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,43 @@
@@ -907,7 +889,7 @@ index 03fb8fb..ab61c3f 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +63,295 @@ impl<'a> Command<'a> {
+@@ -36,12 +63,294 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -1148,7 +1130,6 @@ index 03fb8fb..ab61c3f 100644
 +}
 +
 +fn ls(_command: &Command, cwd: &Path) {
-+    kprintln!("fs: {:?}", FILE_SYSTEM);
 +    let dir_option = match FILE_SYSTEM.open(cwd) {
 +        Ok(entry) => entry.into_dir(),
 +        Err(err) => {
