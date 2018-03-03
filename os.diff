@@ -501,16 +501,15 @@ index e0f18f9..35609c1 100644
 +    _noblock_print(format_args!($($arg)*))
 +}
 diff --git a/kernel/src/fs/mod.rs b/kernel/src/fs/mod.rs
-index 593bb50..3258ff0 100644
+index 593bb50..a54e7da 100644
 --- a/kernel/src/fs/mod.rs
 +++ b/kernel/src/fs/mod.rs
-@@ -3,12 +3,14 @@ pub mod sd;
+@@ -3,12 +3,13 @@ pub mod sd;
  use std::io;
  use std::path::Path;
  
 -use fat32::vfat::{self, Shared, VFat};
 +use fat32::vfat::{Shared, VFat};
-+use console::kprintln;
  pub use fat32::traits;
  
  use mutex::Mutex;
@@ -520,13 +519,12 @@ index 593bb50..3258ff0 100644
  pub struct FileSystem(Mutex<Option<Shared<VFat>>>);
  
  impl FileSystem {
-@@ -26,8 +28,41 @@ impl FileSystem {
+@@ -26,8 +27,40 @@ impl FileSystem {
      ///
      /// Panics if the underlying disk or file sytem failed to initialize.
      pub fn initialize(&self) {
 -        unimplemented!("FileSystem::initialize()")
 +        *self.0.lock() = Some(VFat::from(Sd::new().unwrap()).unwrap());
-+        kprintln!("Got fs!");
      }
  }
  
@@ -825,7 +823,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..16f51c8 100644
+index 03fb8fb..1e1744c 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,43 @@
@@ -889,7 +887,7 @@ index 03fb8fb..16f51c8 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +63,294 @@ impl<'a> Command<'a> {
+@@ -36,12 +63,298 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -1140,7 +1138,11 @@ index 03fb8fb..16f51c8 100644
 +    match dir_option {
 +        Some(dir) => match dir.entries() {
 +            Ok(entries) => for entry in entries {
-+                kprintln!("{}", entry.name());
++                if entry.is_dir() {
++                    kprintln!("{}/", entry.name());
++                } else {
++                    kprintln!("{}", entry.name());
++                }
 +            },
 +            Err(err) => kprintln!("Error listing dir: {}", err),
 +        },
@@ -1151,7 +1153,7 @@ index 03fb8fb..16f51c8 100644
 +}
 +
 +fn cd(command: &Command, cwd: &mut PathBuf) {
-+    if command.args.len() != 1 {
++    if command.args.len() != 2 {
 +        kprintln!("Wrong number of args for cd");
 +        return;
 +    }

@@ -275,7 +275,7 @@ index f6d686f..742842f 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..0692a62 100644
+index 9ef83c1..7fcfa74 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
 @@ -5,30 +5,52 @@ use std::io;
@@ -299,8 +299,9 @@ index 9ef83c1..0692a62 100644
 +    pub(super) metadata: Metadata,
  }
  
- #[repr(C, packed)]
+-#[repr(C, packed)]
 -#[derive(Copy, Clone)]
++#[repr(C, align(32))]
 +#[derive(Debug, Copy, Clone)]
  pub struct VFatRegularDirEntry {
      // FIXME: Fill me in.
@@ -311,7 +312,8 @@ index 9ef83c1..0692a62 100644
  }
  
  #[repr(C, packed)]
- #[derive(Copy, Clone)]
+-#[derive(Copy, Clone)]
++#[derive(Debug, Copy, Clone)]
  pub struct VFatLfnDirEntry {
      // FIXME: Fill me in.
 +    sequence_number: u8,
@@ -335,7 +337,7 @@ index 9ef83c1..0692a62 100644
  }
  
  pub union VFatDirEntry {
-@@ -49,8 +71,179 @@ impl Dir {
+@@ -49,8 +71,174 @@ impl Dir {
      /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
      /// is returned.
      pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
@@ -391,8 +393,7 @@ index 9ef83c1..0692a62 100644
 +
 +    fn next(&mut self) -> Option<Self::Item> {
 +        let entries: *const VFatDirEntry = self.data.as_ptr() as *const VFatDirEntry;
-+        let mut long_file_name: Vec<u16> = Vec::new();
-+        let mut lfn_sequence_num = 0;
++        let mut long_file_name = [0u16; 300];
 +        loop {
 +            let current_entry: &VFatDirEntry = unsafe {
 +                entries
@@ -414,20 +415,15 @@ index 9ef83c1..0692a62 100644
 +            self.current_index += 1;
 +            if unknown_entry.attributes.lfn() {
 +                let lfn_entry = unsafe { current_entry.long_filename };
-+                if lfn_sequence_num == 0 {
-+                    assert!(lfn_entry.sequence_number & (1 << 6) != 0);
-+                    lfn_sequence_num = (lfn_entry.sequence_number & 0x1F) - 1;
-+                } else {
-+                    assert!(lfn_sequence_num == (lfn_entry.sequence_number & 0x1F));
-+                    lfn_sequence_num = lfn_sequence_num - 1;
-+                }
-+                // now it's frrom last to first
++                let lfn_sequence_num = (lfn_entry.sequence_number & 0x1F) as usize - 1;
 +
-+                long_file_name.splice(0..0, lfn_entry.name_characters_3.iter().cloned());
-+                long_file_name.splice(0..0, lfn_entry.name_characters_2.iter().cloned());
-+                long_file_name.splice(0..0, lfn_entry.name_characters.iter().cloned());
++                long_file_name[lfn_sequence_num * 13..lfn_sequence_num * 13 + 5]
++                    .copy_from_slice(&lfn_entry.name_characters);
++                long_file_name[lfn_sequence_num * 13 + 5..lfn_sequence_num * 13 + 11]
++                    .copy_from_slice(&lfn_entry.name_characters_2);
++                long_file_name[lfn_sequence_num * 13 + 11..lfn_sequence_num * 13 + 13]
++                    .copy_from_slice(&lfn_entry.name_characters_3);
 +            } else {
-+                assert!(lfn_sequence_num == 0);
 +                let regular_entry = unsafe { current_entry.regular };
 +                let mut short_file_name = regular_entry.short_file_name.clone();
 +                if short_file_name[0] == 0x05 {
@@ -450,10 +446,11 @@ index 9ef83c1..0692a62 100644
 +                        break;
 +                    }
 +                }
-+                if let Some(len) = nul_byte_index {
-+                    long_file_name.truncate(len);
-+                }
-+                let long_name = String::from_utf16(long_file_name.as_slice()).unwrap();
++                let long_name = String::from_utf16(if let Some(len) = nul_byte_index {
++                    &long_file_name[0..len]
++                } else {
++                    &long_file_name
++                }).unwrap();
 +                if regular_entry.metadata.attributes.directory() {
 +                    return Some(Entry::Dir(Dir {
 +                        cluster: Cluster::from(regular_entry.metadata.first_cluster()),
@@ -1037,10 +1034,10 @@ index 82527ae..d7951be 100644
 +#[cfg(test)]
 +mod tests;
 diff --git a/fat32/src/vfat/tests.rs b/fat32/src/vfat/tests.rs
-index e69de29..b21aa5d 100644
+index e69de29..ba13ef6 100644
 --- a/fat32/src/vfat/tests.rs
 +++ b/fat32/src/vfat/tests.rs
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,78 @@
 +use std::fs;
 +use std::io::{Read, Seek, SeekFrom};
 +use std::mem::transmute;
@@ -1049,6 +1046,7 @@ index e69de29..b21aa5d 100644
 +use traits::Dir;
 +use traits::File;
 +use util::SliceExt;
++use util::VecExt;
 +
 +#[test]
 +fn test_raspbian_img_vfat() {
@@ -1060,8 +1058,6 @@ index e69de29..b21aa5d 100644
 +        let root_cluster = vfat.root_dir_cluster;
 +        let mut buffer = Vec::new();
 +        vfat.read_chain(root_cluster, &mut buffer).unwrap();
-+        let entries: &[::vfat::dir::VFatRegularDirEntry] = unsafe { buffer.as_slice().cast() };
-+        println!("{:?}", &entries[0..10]);
 +        println!("{:?}", *vfat);
 +    }
 +
