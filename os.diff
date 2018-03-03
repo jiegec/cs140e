@@ -147,13 +147,13 @@ index 3572bad..1ba62a0 100644
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
  XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
-index 28384f2..6c0e27a 100644
+index 28384f2..5f7edd8 100644
 --- a/kernel/src/allocator/bin.rs
 +++ b/kernel/src/allocator/bin.rs
-@@ -1,19 +1,40 @@
--use std::fmt;
+@@ -1,19 +1,46 @@
 +use std::cmp::max;
 +use std::cmp::min;
+ use std::fmt;
  use alloc::heap::{AllocErr, Layout};
  
  use allocator::util::*;
@@ -163,11 +163,12 @@ index 28384f2..6c0e27a 100644
 +const SIZEOF_USIZE: usize = size_of::<usize>();
  
  /// A simple allocator that allocates based on size classes.
-+#[derive(Debug)]
  pub struct Allocator {
      // FIXME: Add the necessary fields.
 +    // minimum=usize=8B, 2^3B
 +    free_list: [LinkedList; 32],
++    allocated: usize,
++    total: usize,
  }
  
  impl Allocator {
@@ -178,9 +179,11 @@ index 28384f2..6c0e27a 100644
 +        let mut free_list = [LinkedList::new(); 32];
 +        let mut current_start = start;
 +
++        let mut total = 0;
 +        while current_start + SIZEOF_USIZE <= end {
 +            let lowbit = current_start & (!current_start + 1);
 +            let size = min(lowbit, prev_power_of_two(end - current_start));
++            total += size;
 +            unsafe {
 +                free_list[size.trailing_zeros() as usize].push(current_start as *mut usize);
 +            }
@@ -189,11 +192,13 @@ index 28384f2..6c0e27a 100644
 +
 +        Allocator {
 +            free_list: free_list,
++            allocated: 0,
++            total,
 +        }
      }
  
      /// Allocates memory. Returns a pointer meeting the size and alignment
-@@ -37,7 +58,31 @@ impl Allocator {
+@@ -37,7 +64,32 @@ impl Allocator {
      /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
      /// size or alignment constraints (`AllocError::Unsupported`).
      pub fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
@@ -219,6 +224,7 @@ index 28384f2..6c0e27a 100644
 +                    .pop()
 +                    .expect("current block should have free space now")
 +                    as *mut u8);
++                self.allocated += size;
 +                return result;
 +            }
 +        }
@@ -226,7 +232,7 @@ index 28384f2..6c0e27a 100644
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -54,6 +99,35 @@ impl Allocator {
+@@ -54,6 +106,46 @@ impl Allocator {
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
      pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
@@ -261,6 +267,17 @@ index 28384f2..6c0e27a 100644
 +                }
 +            }
 +        }
++
++        self.allocated -= size;
++    }
++}
++
++impl fmt::Debug for Allocator {
++    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
++        fmt.debug_struct("BinAllocator")
++            .field("allocated", &self.allocated)
++            .field("total", &self.total)
++            .finish()
      }
  }
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
@@ -661,7 +678,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index 2a3f2fa..a92de3f 100644
+index 2a3f2fa..232265c 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -738,7 +755,7 @@ index 2a3f2fa..a92de3f 100644
 +    // echo();
 +    // time();
 +    // hex();
-+    shell::shell("> ");
++    shell::shell("$ ");
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
 index 3a1e46f..83848e3 100644
@@ -830,10 +847,10 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..5253708 100644
+index 03fb8fb..fc2ec13 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,43 @@
+@@ -1,16 +1,44 @@
 -use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::path::{Path, PathBuf};
@@ -842,8 +859,9 @@ index 03fb8fb..5253708 100644
 +#[cfg(not(test))]
 +use ALLOCATOR;
 +use FILE_SYSTEM;
-+use fat32::traits::{Dir, Entry, FileSystem};
++use fat32::traits::{Dir, Entry, File, FileSystem, Metadata};
 +use std::io::Read;
++use std::str;
  
  /// Error type for `Command` parse failures.
  #[derive(Debug)]
@@ -880,7 +898,7 @@ index 03fb8fb..5253708 100644
  }
  
  impl<'a> Command<'a> {
-@@ -21,10 +48,10 @@ impl<'a> Command<'a> {
+@@ -21,10 +49,10 @@ impl<'a> Command<'a> {
      ///
      /// If `s` contains no arguments, returns `Error::Empty`. If there are more
      /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
@@ -894,7 +912,7 @@ index 03fb8fb..5253708 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +63,303 @@ impl<'a> Command<'a> {
+@@ -36,12 +64,329 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -1003,7 +1021,9 @@ index 03fb8fb..5253708 100644
 +                                if direction == b'A' && history_index > 0 {
 +                                    // Up arrow
 +                                    history_index -= 1;
-+                                } else if direction == b'B' && history_index < history.len() - 1 {
++                                } else if direction == b'B' && history.len() > 0 // usize underflow
++                                    && history_index < history.len() - 1
++                                {
 +                                    // Down arrow
 +                                    history_index += 1;
 +                                } else {
@@ -1011,7 +1031,6 @@ index 03fb8fb..5253708 100644
 +                                    continue;
 +                                }
 +
-+                                cursor = line_vec.len();
 +                                for _ in 0..line_vec.len() {
 +                                    console.write_byte(BS);
 +                                }
@@ -1022,6 +1041,7 @@ index 03fb8fb..5253708 100644
 +                                    console.write_byte(BS);
 +                                }
 +                                line_vec = history[history_index].clone();
++                                cursor = line_vec.len();
 +                                for byte in &line_vec {
 +                                    console.write_byte(*byte);
 +                                }
@@ -1135,34 +1155,55 @@ index 03fb8fb..5253708 100644
 +}
 +
 +fn ls(command: &Command, cwd: &Path) {
-+    let args = if command.args.len() == 1 {
-+        &[""]
++    let (all, path) = if command.args.len() > 3 {
++        kprintln!("Wrong number of args! Usage: ls [-a] [directory]");
++        return;
++    } else if command.args.len() == 2 {
++        if command.args[1] == "-a" {
++            (true, PathBuf::from(cwd))
++        } else {
++            (false, cwd.join(command.args[1]))
++        }
++    } else if command.args.len() == 3 {
++        if command.args[1] != "-a" {
++            kprintln!("Wrong arg {}! Usage: ls [-a] [directory]", command.args[1]);
++            return;
++        } else {
++            (true, cwd.join(command.args[2]))
++        }
 +    } else {
-+        &command.args[1..]
++        (false, PathBuf::from(cwd))
 +    };
-+    for arg in args {
-+        let path = cwd.join(arg);
-+        let dir = match FILE_SYSTEM.open_dir(path) {
-+            Ok(entry) => entry,
-+            Err(err) => {
-+                kprintln!("Error: {}", err);
-+                return;
++    let dir = match FILE_SYSTEM.open_dir(path) {
++        Ok(entry) => entry,
++        Err(err) => {
++            kprintln!("Error opening directory: {}", err);
++            return;
++        }
++    };
++    match dir.entries() {
++        Ok(entries) => for entry in entries {
++            let metadata = entry.metadata();
++            if metadata.hidden() && all == false {
++                continue;
 +            }
-+        };
-+        if args.len() > 1 {
-+            kprintln!("{}:", arg);
-+        }
-+        match dir.entries() {
-+            Ok(entries) => for entry in entries {
-+                if entry.is_dir() {
-+                    kprint!("{}/  ", entry.name());
-+                } else {
-+                    kprint!("{}  ", entry.name());
-+                }
-+            },
-+            Err(err) => kprintln!("Error listing dir: {}", err),
-+        }
-+        kprintln!("");
++            kprint!("{}", if metadata.read_only() { 'r' } else { 'w' });
++            kprint!("{}", if metadata.hidden() { 'h' } else { 'v' });
++            kprint!("{}", if metadata.system() { 's' } else { '-' });
++            kprint!("{}", if metadata.volume_id() { 'i' } else { '-' });
++            kprint!("{}", if entry.is_dir() { 'd' } else { 'f' });
++            kprint!("{}", if metadata.archive() { 'a' } else { '-' });
++            kprint!("\t{:?}", metadata.created());
++            kprint!("\t{:?}", metadata.modified());
++            if entry.is_dir() {
++                kprint!("\t0");
++                kprintln!("\t{}/", entry.name());
++            } else {
++                kprint!("\t{}", entry.as_file().unwrap().size());
++                kprintln!("\t{}", entry.name());
++            }
++        },
++        Err(err) => kprintln!("Error listing dir: {}", err),
 +    }
 +}
 +
@@ -1193,9 +1234,12 @@ index 03fb8fb..5253708 100644
 +                continue;
 +            }
 +        };
-+        let mut contents = String::new();
-+        match file.read_to_string(&mut contents) {
-+            Ok(_) => kprintln!("{}", contents),
++        let mut contents = Vec::new();
++        match file.read_to_end(&mut contents) {
++            Ok(_) => kprintln!(
++                "{}",
++                str::from_utf8(&contents).unwrap_or("Error: file contain invalid UTF-8")
++            ),
 +            Err(err) => kprintln!("Error reading file: {}", err),
 +        }
 +    }

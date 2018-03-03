@@ -1006,10 +1006,12 @@ index 2b860cc..d37d000 100644
 +    assert_eq!(stack_vec.as_slice(), &[6, 2, 3, 4, 5, 0]);
 +}
 diff --git a/ttywrite/src/main.rs b/ttywrite/src/main.rs
-index 08d89e8..0cf8eb5 100644
+index 08d89e8..21cb496 100644
 --- a/ttywrite/src/main.rs
 +++ b/ttywrite/src/main.rs
-@@ -1,23 +1,25 @@
+@@ -1,23 +1,28 @@
++#![feature(duration_extras)]
++
  extern crate serial;
  extern crate structopt;
 +#[macro_use]
@@ -1017,6 +1019,7 @@ index 08d89e8..0cf8eb5 100644
  extern crate xmodem;
 -#[macro_use] extern crate structopt_derive;
  
++use std::time::Instant;
  use std::path::PathBuf;
  use std::time::Duration;
  
@@ -1040,29 +1043,32 @@ index 08d89e8..0cf8eb5 100644
      input: Option<PathBuf>,
  
      #[structopt(short = "b", long = "baud", parse(try_from_str = "parse_baud_rate"),
-@@ -32,8 +34,7 @@ struct Opt {
-                 help = "Set data character width in bits", default_value = "8")]
-     char_width: CharSize,
- 
--    #[structopt(help = "Path to TTY device", parse(from_os_str))]
--    tty_path: PathBuf,
-+    #[structopt(help = "Path to TTY device", parse(from_os_str))] tty_path: PathBuf,
- 
-     #[structopt(short = "f", long = "flow-control", parse(try_from_str = "parse_flow_control"),
-                 help = "Enable flow control ('hardware' or 'software')", default_value = "none")]
-@@ -43,16 +44,63 @@ struct Opt {
-                 help = "Set number of stop bits", default_value = "1")]
-     stop_bits: StopBits,
- 
--    #[structopt(short = "r", long = "raw", help = "Disable XMODEM")]
--    raw: bool,
-+    #[structopt(short = "r", long = "raw", help = "Disable XMODEM")] raw: bool,
-+}
-+
-+fn progress_fn(progress: Progress) {
-+    println!("Progress: {:?}", progress);
+@@ -47,12 +52,78 @@ struct Opt {
+     raw: bool,
  }
  
++fn progress_fn(_progress: Progress) {
++    static mut LAST_TIME: Option<Instant> = None;
++    static mut BYTES_SENT: u64 = 0;
++    unsafe {
++        BYTES_SENT += 128;
++        LAST_TIME = match LAST_TIME {
++            Some(last_time) => {
++                let now = Instant::now();
++                let duration = now - last_time;
++                let nanos = duration.as_secs() * 1_000_000_000 + duration.subsec_nanos() as u64;
++                println!(
++                    "Progress: {} bytes sent at {:.2} KiB/s",
++                    BYTES_SENT,
++                    128.0 * 1_000_000_000.0 / 1024.0 / nanos as f64
++                );
++                Some(now)
++            }
++            None => Some(Instant::now()),
++        };
++    }
++}
++
  fn main() {
      use std::fs::File;
 -    use std::io::{self, BufReader, BufRead};

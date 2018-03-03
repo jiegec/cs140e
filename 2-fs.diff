@@ -133,6 +133,20 @@ index c896a42..a6f3ebb 100644
 +    fn f<T: Sync + Send + 'static>() {}
      f::<Shared<VFat>>();
  }
+diff --git a/fat32/src/traits/dummy.rs b/fat32/src/traits/dummy.rs
+index 38d7f34..cf16ae5 100644
+--- a/fat32/src/traits/dummy.rs
++++ b/fat32/src/traits/dummy.rs
+@@ -64,6 +64,9 @@ impl Metadata for Dummy {
+     type Timestamp = Dummy;
+     fn read_only(&self) -> bool { panic!("Dummy") }
+     fn hidden(&self) -> bool { panic!("Dummy") }
++    fn system(&self) -> bool { panic!("Dummy") }
++    fn volume_id(&self) -> bool { panic!("Dummy") }
++    fn archive(&self) -> bool { panic!("Dummy") }
+     fn created(&self) -> Self::Timestamp { panic!("Dummy") }
+     fn accessed(&self) -> Self::Timestamp { panic!("Dummy") }
+     fn modified(&self) -> Self::Timestamp { panic!("Dummy") }
 diff --git a/fat32/src/traits/fs.rs b/fat32/src/traits/fs.rs
 index 21f1c52..34684fb 100644
 --- a/fat32/src/traits/fs.rs
@@ -151,6 +165,21 @@ index 21f1c52..34684fb 100644
 +
 +    fn canonicalize<P :AsRef<Path>>(self, path: P) -> io::Result<PathBuf>;
  }
+diff --git a/fat32/src/traits/metadata.rs b/fat32/src/traits/metadata.rs
+index 524abe4..155a5b5 100644
+--- a/fat32/src/traits/metadata.rs
++++ b/fat32/src/traits/metadata.rs
+@@ -34,6 +34,10 @@ pub trait Metadata: Sized {
+     /// Whether the entry should be "hidden" from directory traversals.
+     fn hidden(&self) -> bool;
+ 
++    fn system(&self) -> bool;
++    fn volume_id(&self) -> bool;
++    fn archive(&self) -> bool;
++
+     /// The timestamp when the entry was created.
+     fn created(&self) -> Self::Timestamp;
+ 
 diff --git a/fat32/src/vfat/cache.rs b/fat32/src/vfat/cache.rs
 index ea952fb..89a468c 100644
 --- a/fat32/src/vfat/cache.rs
@@ -872,10 +901,10 @@ index fed2007..3fc0b3f 100644
      }
  }
 diff --git a/fat32/src/vfat/metadata.rs b/fat32/src/vfat/metadata.rs
-index 1822cc5..d9cc110 100644
+index 1822cc5..8f10d03 100644
 --- a/fat32/src/vfat/metadata.rs
 +++ b/fat32/src/vfat/metadata.rs
-@@ -18,20 +18,159 @@ pub struct Time(u16);
+@@ -18,20 +18,171 @@ pub struct Time(u16);
  pub struct Attributes(u8);
  
  /// A structure containing a date and time.
@@ -982,6 +1011,18 @@ index 1822cc5..d9cc110 100644
 +        self.attributes.hidden()
 +    }
 +
++    fn system(&self) -> bool {
++        self.attributes.system()
++    }
++
++    fn volume_id(&self) -> bool {
++        self.attributes.volume_id()
++    }
++
++    fn archive(&self) -> bool {
++        self.attributes.archive()
++    }
++
 +    fn created(&self) -> Self::Timestamp {
 +        Timestamp {
 +            // TODO: deal with tenth second?
@@ -1023,7 +1064,7 @@ index 1822cc5..d9cc110 100644
 +    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 +        use traits::Timestamp;
 +        f.write_fmt(format_args!(
-+            "Timestamp {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
++            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
 +            self.year(),
 +            self.month(),
 +            self.day(),
