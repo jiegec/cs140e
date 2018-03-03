@@ -501,12 +501,15 @@ index e0f18f9..35609c1 100644
 +    _noblock_print(format_args!($($arg)*))
 +}
 diff --git a/kernel/src/fs/mod.rs b/kernel/src/fs/mod.rs
-index 593bb50..a54e7da 100644
+index 593bb50..7cda8af 100644
 --- a/kernel/src/fs/mod.rs
 +++ b/kernel/src/fs/mod.rs
-@@ -3,12 +3,13 @@ pub mod sd;
+@@ -1,14 +1,15 @@
+ pub mod sd;
+ 
  use std::io;
- use std::path::Path;
+-use std::path::Path;
++use std::path::{Path, PathBuf};
  
 -use fat32::vfat::{self, Shared, VFat};
 +use fat32::vfat::{Shared, VFat};
@@ -519,7 +522,7 @@ index 593bb50..a54e7da 100644
  pub struct FileSystem(Mutex<Option<Shared<VFat>>>);
  
  impl FileSystem {
-@@ -26,8 +27,40 @@ impl FileSystem {
+@@ -26,8 +27,44 @@ impl FileSystem {
      ///
      /// Panics if the underlying disk or file sytem failed to initialize.
      pub fn initialize(&self) {
@@ -536,6 +539,10 @@ index 593bb50..a54e7da 100644
 +
 +    fn open<P: AsRef<Path>>(self, path: P) -> io::Result<Self::Entry> {
 +        self.0.lock().as_ref().unwrap().open(path)
++    }
++
++    fn canonicalize<P: AsRef<Path>>(self, path: P) -> io::Result<PathBuf> {
++        self.0.lock().as_ref().unwrap().canonicalize(path)
 +    }
 +
 +    fn create_file<P: AsRef<Path>>(self, path: P) -> io::Result<Self::File> {
@@ -823,7 +830,7 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..1e1744c 100644
+index 03fb8fb..5253708 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,43 @@
@@ -887,7 +894,7 @@ index 03fb8fb..1e1744c 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +63,298 @@ impl<'a> Command<'a> {
+@@ -36,12 +63,303 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -915,7 +922,7 @@ index 03fb8fb..1e1744c 100644
 +                match path {
 +                    "atags" => atags(&command),
 +                    "cat" => cat(&command, cwd.as_path()),
-+                    "cd" => cd(&command, &mut cwd),
++                    "cd" => cwd = cd(&command, cwd),
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => exit(&command),
@@ -1127,37 +1134,49 @@ index 03fb8fb..1e1744c 100644
 +    kprintln!("Allocator: {:?}", ALLOCATOR);
 +}
 +
-+fn ls(_command: &Command, cwd: &Path) {
-+    let dir_option = match FILE_SYSTEM.open(cwd) {
-+        Ok(entry) => entry.into_dir(),
-+        Err(err) => {
-+            kprintln!("Error: {}", err);
-+            return;
-+        }
++fn ls(command: &Command, cwd: &Path) {
++    let args = if command.args.len() == 1 {
++        &[""]
++    } else {
++        &command.args[1..]
 +    };
-+    match dir_option {
-+        Some(dir) => match dir.entries() {
++    for arg in args {
++        let path = cwd.join(arg);
++        let dir = match FILE_SYSTEM.open_dir(path) {
++            Ok(entry) => entry,
++            Err(err) => {
++                kprintln!("Error: {}", err);
++                return;
++            }
++        };
++        if args.len() > 1 {
++            kprintln!("{}:", arg);
++        }
++        match dir.entries() {
 +            Ok(entries) => for entry in entries {
 +                if entry.is_dir() {
-+                    kprintln!("{}/", entry.name());
++                    kprint!("{}/  ", entry.name());
 +                } else {
-+                    kprintln!("{}", entry.name());
++                    kprint!("{}  ", entry.name());
 +                }
 +            },
 +            Err(err) => kprintln!("Error listing dir: {}", err),
-+        },
-+        None => {
-+            kprintln!("Not a dir!");
 +        }
++        kprintln!("");
 +    }
 +}
 +
-+fn cd(command: &Command, cwd: &mut PathBuf) {
++fn cd(command: &Command, cwd: PathBuf) -> PathBuf {
 +    if command.args.len() != 2 {
 +        kprintln!("Wrong number of args for cd");
-+        return;
++        return cwd;
 +    }
-+    cwd.push(command.args[1]);
++    FILE_SYSTEM
++        .canonicalize(cwd.join(command.args[1]))
++        .unwrap_or_else(|err| {
++            kprintln!("Error: {}", err);
++            cwd
++        })
 +}
 +
 +fn pwd(_command: &Command, cwd: &Path) {
@@ -1166,25 +1185,18 @@ index 03fb8fb..1e1744c 100644
 +
 +fn cat(command: &Command, cwd: &Path) {
 +    for files in &command.args[1..] {
-+        let file = cwd.join(files);
-+        let file_option = match FILE_SYSTEM.open(file) {
-+            Ok(entry) => entry.into_file(),
++        let file_path = cwd.join(files);
++        let mut file = match FILE_SYSTEM.open_file(file_path) {
++            Ok(entry) => entry,
 +            Err(err) => {
 +                kprintln!("Error: {}", err);
 +                continue;
 +            }
 +        };
-+        match file_option {
-+            Some(mut file) => {
-+                let mut contents = String::new();
-+                match file.read_to_string(&mut contents) {
-+                    Ok(_) => kprintln!("{}", contents),
-+                    Err(err) => kprintln!("Error reading file: {}", err),
-+                }
-+            }
-+            None => {
-+                kprintln!("Not a file!");
-+            }
++        let mut contents = String::new();
++        match file.read_to_string(&mut contents) {
++            Ok(_) => kprintln!("{}", contents),
++            Err(err) => kprintln!("Error reading file: {}", err),
 +        }
 +    }
  }

@@ -133,6 +133,24 @@ index c896a42..a6f3ebb 100644
 +    fn f<T: Sync + Send + 'static>() {}
      f::<Shared<VFat>>();
  }
+diff --git a/fat32/src/traits/fs.rs b/fat32/src/traits/fs.rs
+index 21f1c52..34684fb 100644
+--- a/fat32/src/traits/fs.rs
++++ b/fat32/src/traits/fs.rs
+@@ -1,5 +1,5 @@
+ use std::io;
+-use std::path::Path;
++use std::path::{Path, PathBuf};
+ 
+ use traits::Metadata;
+ 
+@@ -184,4 +184,6 @@ pub trait FileSystem: Sized {
+     ///
+     /// All other error values are implementation defined.
+     fn remove<P: AsRef<Path>>(self, path: P, children: bool) -> io::Result<()>;
++
++    fn canonicalize<P :AsRef<Path>>(self, path: P) -> io::Result<PathBuf>;
+ }
 diff --git a/fat32/src/vfat/cache.rs b/fat32/src/vfat/cache.rs
 index ea952fb..89a468c 100644
 --- a/fat32/src/vfat/cache.rs
@@ -1117,10 +1135,15 @@ index e69de29..ba13ef6 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..681550b 100644
+index 7059b43..447111d 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -5,26 +5,52 @@ use std::cmp::min;
+@@ -1,30 +1,56 @@
+ use std::io;
+-use std::path::Path;
++use std::path::{Path, PathBuf};
+ use std::mem::size_of;
+ use std::cmp::min;
  
  use util::SliceExt;
  use mbr::MasterBootRecord;
@@ -1180,7 +1203,7 @@ index 7059b43..681550b 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +77,95 @@ impl VFat {
+@@ -51,15 +77,139 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1247,6 +1270,51 @@ index 7059b43..681550b 100644
 +            }
 +        }
 +    }
++}
++
++impl Shared<VFat> {
++    fn get_entries<P: AsRef<Path>>(&self, path_ref: P) -> io::Result<Vec<Entry>> {
++        let path = path_ref.as_ref();
++        if !path.is_absolute() {
++            return Err(io::Error::new(io::ErrorKind::InvalidInput, "path must be absolute"))
++        }
++
++        let mut dir_entries = Vec::new();
++        for component in path.components() {
++            match component {
++                Component::RootDir => {
++                    dir_entries.truncate(0);
++                    dir_entries.push(Entry::Dir(Dir::new_root(self)))
++                }
++                Component::CurDir => {} // do nothing
++                Component::Normal(name) => {
++                    use traits::Entry;
++                    let new_entry = match dir_entries.last() {
++                        Some(current_entry) => match current_entry.as_dir() {
++                            Some(dir) => dir.find(name)?,
++                            None => {
++                                return Err(io::Error::new(
++                                    io::ErrorKind::NotFound,
++                                    "file not found",
++                                ))
++                            }
++                        },
++                        None => return Err(io::Error::from(io::ErrorKind::NotFound)),
++                    };
++                    dir_entries.push(new_entry);
++                }
++                Component::ParentDir => {
++                    if dir_entries.len() > 0 {
++                        dir_entries.pop();
++                    } else {
++                        return Err(io::Error::from(io::ErrorKind::NotFound));
++                    }
++                }
++                _ => unimplemented!(),
++            }
++        }
++        Ok(dir_entries)
++    }
  }
  
  impl<'a> FileSystem for &'a Shared<VFat> {
@@ -1256,31 +1324,31 @@ index 7059b43..681550b 100644
 +    type File = File;
 +    type Dir = Dir;
 +    type Entry = Entry;
- 
-     fn open<P: AsRef<Path>>(self, path: P) -> io::Result<Self::Entry> {
--        unimplemented!("FileSystem::open()")
-+        let mut current_entry = Entry::Dir(Dir::new_root(self));
-+        for component in path.as_ref().components() {
-+            match component {
-+                Component::RootDir => current_entry = Entry::Dir(Dir::new_root(self)),
-+                Component::CurDir => {} // do nothing
-+                Component::Normal(name) => {
-+                    use traits::Entry;
-+                    current_entry = match current_entry.as_dir() {
-+                        Some(dir) => dir.find(name)?,
-+                        None => {
-+                            return Err(io::Error::new(io::ErrorKind::NotFound, "file not found"))
-+                        }
-+                    }
-+                }
-+                _ => unimplemented!(),
-+            }
++
++
++    fn open<P: AsRef<Path>>(self, path_ref: P) -> io::Result<Self::Entry> {
++        let dir_entries = self.get_entries(path_ref)?;
++
++        match dir_entries.into_iter().last() {
++            Some(current_entry) => Ok(current_entry),
++            None => Err(io::Error::from(io::ErrorKind::NotFound)),
 +        }
-+        Ok(current_entry)
++    }
+ 
+-    fn open<P: AsRef<Path>>(self, path: P) -> io::Result<Self::Entry> {
+-        unimplemented!("FileSystem::open()")
++    fn canonicalize<P: AsRef<Path>>(self, path_ref: P) -> io::Result<PathBuf> {
++        let dir_entries = self.get_entries(path_ref)?;
++        let mut result = PathBuf::from("/");
++        for entry in dir_entries {
++            use traits::Entry;
++            result.push(entry.name());
++        }
++        Ok(result)
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +173,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +217,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
