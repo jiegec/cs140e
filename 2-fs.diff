@@ -1191,7 +1191,7 @@ index e69de29..ba13ef6 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..10d0eb0 100644
+index 7059b43..2eb59a1 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
 @@ -1,30 +1,67 @@
@@ -1270,7 +1270,7 @@ index 7059b43..10d0eb0 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +88,153 @@ impl VFat {
+@@ -51,15 +88,184 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1321,11 +1321,41 @@ index 7059b43..10d0eb0 100644
 +        Ok(size)
 +    }
 +
++    fn next_cluster(&mut self, cluster: Cluster) -> io::Result<Option<Cluster>> {
++        if !cluster.is_valid() {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                "Invalid cluster num",
++            ));
++        }
++        match self.fat_entry(cluster)?.status() {
++            Status::Eoc(_) => Ok(None),
++            Status::Data(next_cluster) => {
++                if next_cluster.is_valid() {
++                    Ok(Some(next_cluster))
++                } else {
++                    Err(io::Error::new(
++                        io::ErrorKind::InvalidData,
++                        "Invalid cluster num",
++                    ))
++                }
++            }
++            _ => Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                "Invalid cluster chain",
++            )),
++        }
++    }
++
 +    pub(super) fn read_chain(&mut self, start: Cluster, buf: &mut Vec<u8>) -> io::Result<usize> {
++        // Floyd's Cycle Detection Algorithm
++        // This is the tortoise
 +        let mut current_cluster = start;
++        // This is the hare
++        let mut hare_cluster = self.next_cluster(current_cluster)?;
 +        let mut current_cluster_num = 0;
 +        let bytes_per_cluster = self.bytes_per_sector as usize * self.sectors_per_cluster as usize;
-+        loop {
++        while Some(current_cluster) != hare_cluster {
 +            current_cluster_num += 1;
 +            buf.resize(bytes_per_cluster * current_cluster_num, 0);
 +            self.read_cluster(
@@ -1333,21 +1363,22 @@ index 7059b43..10d0eb0 100644
 +                0,
 +                &mut buf[bytes_per_cluster * (current_cluster_num - 1)..],
 +            )?;
-+            match self.fat_entry(current_cluster)?.status() {
-+                Status::Eoc(_) => {
-+                    return Ok(bytes_per_cluster * current_cluster_num);
-+                }
-+                Status::Data(next_cluster) => {
++            match self.next_cluster(current_cluster)? {
++                Some(next_cluster) => {
 +                    current_cluster = next_cluster;
 +                }
-+                _ => {
-+                    return Err(io::Error::new(
-+                        io::ErrorKind::InvalidData,
-+                        "Invalid cluster chain",
-+                    ))
++                None => {
++                    return Ok(bytes_per_cluster * current_cluster_num);
 +                }
 +            }
++            if let Some(cluster) = hare_cluster {
++                hare_cluster = self.next_cluster(cluster)?;
++            }
++            if let Some(cluster) = hare_cluster {
++                hare_cluster = self.next_cluster(cluster)?;
++            }
 +        }
++        Err(io::Error::new(io::ErrorKind::InvalidData, "Cycle detected in cluster chain"))
 +    }
 +}
 +
@@ -1429,7 +1460,7 @@ index 7059b43..10d0eb0 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +242,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +273,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
