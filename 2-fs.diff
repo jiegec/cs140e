@@ -304,10 +304,10 @@ index ea952fb..89a468c 100644
      }
  }
 diff --git a/fat32/src/vfat/cluster.rs b/fat32/src/vfat/cluster.rs
-index f6d686f..742842f 100644
+index f6d686f..5e5af45 100644
 --- a/fat32/src/vfat/cluster.rs
 +++ b/fat32/src/vfat/cluster.rs
-@@ -10,3 +10,13 @@ impl From<u32> for Cluster {
+@@ -10,3 +10,17 @@ impl From<u32> for Cluster {
  }
  
  // TODO: Implement any useful helper methods on `Cluster`.
@@ -320,12 +320,21 @@ index f6d686f..742842f 100644
 +        // Cluster start from 2
 +        self.0 - 2
 +    }
++
++    pub(super) fn is_valid(&self) -> bool {
++        self.0 >= 2
++    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..7fcfa74 100644
+index 9ef83c1..0488001 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
-@@ -5,30 +5,52 @@ use std::io;
+@@ -1,3 +1,4 @@
++use std::mem::size_of;
+ use std::ffi::OsStr;
+ use std::char::decode_utf16;
+ use std::borrow::Cow;
+@@ -5,30 +6,52 @@ use std::io;
  
  use traits;
  use util::VecExt;
@@ -384,7 +393,7 @@ index 9ef83c1..7fcfa74 100644
  }
  
  pub union VFatDirEntry {
-@@ -49,8 +71,174 @@ impl Dir {
+@@ -49,8 +72,175 @@ impl Dir {
      /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
      /// is returned.
      pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
@@ -441,7 +450,7 @@ index 9ef83c1..7fcfa74 100644
 +    fn next(&mut self) -> Option<Self::Item> {
 +        let entries: *const VFatDirEntry = self.data.as_ptr() as *const VFatDirEntry;
 +        let mut long_file_name = [0u16; 300];
-+        loop {
++        while self.current_index * size_of::<VFatDirEntry>() < self.data.len() {
 +            let current_entry: &VFatDirEntry = unsafe {
 +                entries
 +                    .offset(self.current_index as isize)
@@ -523,6 +532,7 @@ index 9ef83c1..7fcfa74 100644
 +                }
 +            }
 +        }
++        None
 +    }
 +}
 +
@@ -762,10 +772,10 @@ index c89e0ef..1b31f84 100644
  }
  
 diff --git a/fat32/src/vfat/file.rs b/fat32/src/vfat/file.rs
-index fed2007..3fc0b3f 100644
+index fed2007..9068077 100644
 --- a/fat32/src/vfat/file.rs
 +++ b/fat32/src/vfat/file.rs
-@@ -1,15 +1,77 @@
+@@ -1,15 +1,82 @@
 -use std::cmp::{min, max};
 +use std::cmp::{max, min};
  use std::io::{self, SeekFrom};
@@ -821,7 +831,12 @@ index fed2007..3fc0b3f 100644
 +                    Status::Data(next_cluster) => {
 +                        current_cluster = Some(next_cluster);
 +                    }
-+                    _ => unimplemented!(),
++                    _ => {
++                        return Err(io::Error::new(
++                            io::ErrorKind::InvalidData,
++                            "Invalid cluster chain",
++                        ))
++                    }
 +                }
 +            }
 +            buffer_offset += newly_read_size;
@@ -846,7 +861,7 @@ index fed2007..3fc0b3f 100644
  
  impl io::Seek for File {
      /// Seek to offset `pos` in the file.
-@@ -26,6 +88,52 @@ impl io::Seek for File {
+@@ -26,6 +93,52 @@ impl io::Seek for File {
      /// Seeking before the start of a file or beyond the end of the file results
      /// in an `InvalidInput` error.
      fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
@@ -1176,10 +1191,10 @@ index e69de29..ba13ef6 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..447111d 100644
+index 7059b43..1070230 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -1,30 +1,56 @@
+@@ -1,30 +1,62 @@
  use std::io;
 -use std::path::Path;
 +use std::path::{Path, PathBuf};
@@ -1223,6 +1238,12 @@ index 7059b43..447111d 100644
 +            None => return Err(Error::NotFound),
 +        };
 +        let ebpb = BiosParameterBlock::from(&mut device, fat_start_sector)?;
++        if ebpb.bytes_per_sector == 0 || ebpb.bytes_per_sector % device.sector_size() as u16 != 0 {
++            return Err(Error::Io(io::Error::new(
++                io::ErrorKind::Other,
++                "unsupported logical sector size",
++            )));
++        }
 +        let sectors_per_fat = ebpb.sectors_per_fat();
 +        let cached_device = CachedDevice::new(
 +            device,
@@ -1238,13 +1259,13 @@ index 7059b43..447111d 100644
 +            sectors_per_fat: sectors_per_fat,
 +            fat_start_sector: fat_start_sector + ebpb.reserved_sectors as u64,
 +            data_start_sector: fat_start_sector + ebpb.reserved_sectors as u64
-+                + (sectors_per_fat * ebpb.number_of_fats as u32) as u64,
++                + sectors_per_fat as u64 * ebpb.number_of_fats as u64,
 +            root_dir_cluster: Cluster::from(ebpb.root_directory_cluster),
 +        }))
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +77,139 @@ impl VFat {
+@@ -51,15 +83,153 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1265,6 +1286,13 @@ index 7059b43..447111d 100644
 +        offset: usize,
 +        buf: &mut [u8],
 +    ) -> io::Result<usize> {
++        if !cluster.is_valid() {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "Invalid cluster",
++            ));
++        }
++
 +        let sector_size = self.device.sector_size() as usize;
 +        let size = min(
 +            buf.len(),
@@ -1307,7 +1335,12 @@ index 7059b43..447111d 100644
 +                Status::Data(next_cluster) => {
 +                    current_cluster = next_cluster;
 +                }
-+                _ => unimplemented!(),
++                _ => {
++                    return Err(io::Error::new(
++                        io::ErrorKind::InvalidData,
++                        "Invalid cluster chain",
++                    ))
++                }
 +            }
 +        }
 +    }
@@ -1317,7 +1350,10 @@ index 7059b43..447111d 100644
 +    fn get_entries<P: AsRef<Path>>(&self, path_ref: P) -> io::Result<Vec<Entry>> {
 +        let path = path_ref.as_ref();
 +        if !path.is_absolute() {
-+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "path must be absolute"))
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "path must be absolute",
++            ));
 +        }
 +
 +        let mut dir_entries = Vec::new();
@@ -1366,7 +1402,6 @@ index 7059b43..447111d 100644
 +    type Dir = Dir;
 +    type Entry = Entry;
 +
-+
 +    fn open<P: AsRef<Path>>(self, path_ref: P) -> io::Result<Self::Entry> {
 +        let dir_entries = self.get_entries(path_ref)?;
 +
@@ -1389,7 +1424,7 @@ index 7059b43..447111d 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +217,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +237,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>
@@ -1428,6 +1463,12 @@ index e69de29..c977762 100644
 +++ b/questions/enduser-unsafe
 @@ -0,0 +1 @@
 +We can limit `unsafe' to only a small portion of code that we can easily check, leaving rest of the code safe Rust. It's hard to enforce the same constraint in C.
+diff --git a/questions/foreign-safety b/questions/foreign-safety
+index e69de29..4237a1b 100644
+--- a/questions/foreign-safety
++++ b/questions/foreign-safety
+@@ -0,0 +1 @@
++The file system is wrapped in a Shared<VFat>, so only one thread can use the filesystem at a time.
 diff --git a/questions/lfn-identity b/questions/lfn-identity
 index e69de29..9a44fbb 100644
 --- a/questions/lfn-identity
@@ -1446,6 +1487,12 @@ index e69de29..d8c8b91 100644
 +++ b/questions/ll-alloc
 @@ -0,0 +1 @@
 +It saves the list pointers in place. Because we are implementing the allocator, it's hard to dynamically allocate some space for storing the linked list.
+diff --git a/questions/mangling b/questions/mangling
+index e69de29..7fc90c0 100644
+--- a/questions/mangling
++++ b/questions/mangling
+@@ -0,0 +1 @@
++In C++ and Rust, methods can be overloaded, so functions have to be identified by both its name and its argument types.
 diff --git a/questions/manual-lookup b/questions/manual-lookup
 index e69de29..ec87f2c 100644
 --- a/questions/manual-lookup
