@@ -1191,10 +1191,10 @@ index e69de29..ba13ef6 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/vfat.rs b/fat32/src/vfat/vfat.rs
-index 7059b43..1070230 100644
+index 7059b43..10d0eb0 100644
 --- a/fat32/src/vfat/vfat.rs
 +++ b/fat32/src/vfat/vfat.rs
-@@ -1,30 +1,62 @@
+@@ -1,30 +1,67 @@
  use std::io;
 -use std::path::Path;
 +use std::path::{Path, PathBuf};
@@ -1235,7 +1235,12 @@ index 7059b43..1070230 100644
 +        let fat_start_sector_option = mbr.first_vfat_partition_lba();
 +        let fat_start_sector = match fat_start_sector_option {
 +            Some(sector) => sector as u64,
-+            None => return Err(Error::NotFound),
++            None => {
++                return Err(Error::Io(io::Error::new(
++                    io::ErrorKind::NotFound,
++                    "cannot find the first vfat partition",
++                )))
++            }
 +        };
 +        let ebpb = BiosParameterBlock::from(&mut device, fat_start_sector)?;
 +        if ebpb.bytes_per_sector == 0 || ebpb.bytes_per_sector % device.sector_size() as u16 != 0 {
@@ -1265,7 +1270,7 @@ index 7059b43..1070230 100644
      }
  
      // TODO: The following methods may be useful here:
-@@ -51,15 +83,153 @@ impl VFat {
+@@ -51,15 +88,153 @@ impl VFat {
      //    reference points directly into a cached sector.
      //
      //    fn fat_entry(&mut self, cluster: Cluster) -> io::Result<&FatEntry>;
@@ -1424,7 +1429,7 @@ index 7059b43..1070230 100644
      }
  
      fn create_file<P: AsRef<Path>>(self, _path: P) -> io::Result<Self::File> {
-@@ -67,13 +237,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
+@@ -67,13 +242,16 @@ impl<'a> FileSystem for &'a Shared<VFat> {
      }
  
      fn create_dir<P>(self, _path: P, _parents: bool) -> io::Result<Self::Dir>

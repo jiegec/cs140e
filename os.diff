@@ -147,7 +147,7 @@ index 3572bad..1ba62a0 100644
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
  XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
-index 28384f2..5f7edd8 100644
+index f82b82b..8c45b41 100644
 --- a/kernel/src/allocator/bin.rs
 +++ b/kernel/src/allocator/bin.rs
 @@ -1,19 +1,46 @@
@@ -232,7 +232,7 @@ index 28384f2..5f7edd8 100644
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -54,6 +106,46 @@ impl Allocator {
+@@ -54,8 +106,48 @@ impl Allocator {
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
      pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
@@ -269,17 +269,19 @@ index 28384f2..5f7edd8 100644
 +        }
 +
 +        self.allocated -= size;
-+    }
-+}
+     }
+ }
 +
+ //
+ // FIXME: Implement `Debug` for `Allocator`.
 +impl fmt::Debug for Allocator {
 +    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 +        fmt.debug_struct("BinAllocator")
 +            .field("allocated", &self.allocated)
 +            .field("total", &self.total)
 +            .finish()
-     }
- }
++    }
++}
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
 index e8741cf..02ae36e 100644
 --- a/kernel/src/allocator/bump.rs
