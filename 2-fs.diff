@@ -1,13 +1,12 @@
 diff --git a/fat32/src/mbr.rs b/fat32/src/mbr.rs
-index d200c10..32459af 100644
+index d200c10..3742e38 100644
 --- a/fat32/src/mbr.rs
 +++ b/fat32/src/mbr.rs
-@@ -1,23 +1,39 @@
+@@ -1,23 +1,38 @@
  use std::{fmt, io};
  
  use traits::BlockDevice;
-+use std::mem::{transmute_copy, align_of};
-+
++use std::mem::transmute_copy;
  
  #[repr(C, packed)]
  #[derive(Copy, Clone)]
@@ -43,7 +42,7 @@ index d200c10..32459af 100644
  }
  
  #[derive(Debug)]
-@@ -40,12 +56,57 @@ impl MasterBootRecord {
+@@ -40,12 +55,57 @@ impl MasterBootRecord {
      /// boot indicator. Returns `Io(err)` if the I/O error `err` occured while
      /// reading the MBR.
      pub fn from<T: BlockDevice>(mut device: T) -> Result<MasterBootRecord, Error> {
@@ -326,7 +325,7 @@ index f6d686f..5e5af45 100644
 +    }
 +}
 diff --git a/fat32/src/vfat/dir.rs b/fat32/src/vfat/dir.rs
-index 9ef83c1..0488001 100644
+index 9ef83c1..2538317 100644
 --- a/fat32/src/vfat/dir.rs
 +++ b/fat32/src/vfat/dir.rs
 @@ -1,3 +1,4 @@
@@ -393,7 +392,7 @@ index 9ef83c1..0488001 100644
  }
  
  pub union VFatDirEntry {
-@@ -49,8 +72,175 @@ impl Dir {
+@@ -49,8 +72,177 @@ impl Dir {
      /// If `name` contains invalid UTF-8 characters, an error of `InvalidInput`
      /// is returned.
      pub fn find<P: AsRef<OsStr>>(&self, name: P) -> io::Result<Entry> {
@@ -449,7 +448,7 @@ index 9ef83c1..0488001 100644
 +
 +    fn next(&mut self) -> Option<Self::Item> {
 +        let entries: *const VFatDirEntry = self.data.as_ptr() as *const VFatDirEntry;
-+        let mut long_file_name = [0u16; 300];
++        let mut long_file_name = [0u16; 260];
 +        while self.current_index * size_of::<VFatDirEntry>() < self.data.len() {
 +            let current_entry: &VFatDirEntry = unsafe {
 +                entries
@@ -473,12 +472,14 @@ index 9ef83c1..0488001 100644
 +                let lfn_entry = unsafe { current_entry.long_filename };
 +                let lfn_sequence_num = (lfn_entry.sequence_number & 0x1F) as usize - 1;
 +
-+                long_file_name[lfn_sequence_num * 13..lfn_sequence_num * 13 + 5]
-+                    .copy_from_slice(&lfn_entry.name_characters);
-+                long_file_name[lfn_sequence_num * 13 + 5..lfn_sequence_num * 13 + 11]
-+                    .copy_from_slice(&lfn_entry.name_characters_2);
-+                long_file_name[lfn_sequence_num * 13 + 11..lfn_sequence_num * 13 + 13]
-+                    .copy_from_slice(&lfn_entry.name_characters_3);
++                if lfn_sequence_num <= 19 {
++                    long_file_name[lfn_sequence_num * 13..lfn_sequence_num * 13 + 5]
++                        .copy_from_slice(&lfn_entry.name_characters);
++                    long_file_name[lfn_sequence_num * 13 + 5..lfn_sequence_num * 13 + 11]
++                        .copy_from_slice(&lfn_entry.name_characters_2);
++                    long_file_name[lfn_sequence_num * 13 + 11..lfn_sequence_num * 13 + 13]
++                        .copy_from_slice(&lfn_entry.name_characters_3);
++                }
 +            } else {
 +                let regular_entry = unsafe { current_entry.regular };
 +                let mut short_file_name = regular_entry.short_file_name.clone();

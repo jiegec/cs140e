@@ -122,7 +122,7 @@ index e69de29..2dd73f2 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
-index 8dac76f..20a635b 100644
+index eadd84a..4f6690b 100644
 --- a/kernel/Cargo.toml
 +++ b/kernel/Cargo.toml
 @@ -9,7 +9,6 @@ path = "src/kmain.rs"
@@ -147,7 +147,7 @@ index 3572bad..1ba62a0 100644
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
  XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
-index f82b82b..8c45b41 100644
+index 5cde581..ff6c76a 100644
 --- a/kernel/src/allocator/bin.rs
 +++ b/kernel/src/allocator/bin.rs
 @@ -1,19 +1,46 @@
@@ -232,7 +232,7 @@ index f82b82b..8c45b41 100644
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -54,8 +106,48 @@ impl Allocator {
+@@ -54,8 +106,47 @@ impl Allocator {
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
      pub fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
@@ -271,8 +271,7 @@ index f82b82b..8c45b41 100644
 +        self.allocated -= size;
      }
  }
-+
- //
+ 
  // FIXME: Implement `Debug` for `Allocator`.
 +impl fmt::Debug for Allocator {
 +    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -680,7 +679,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index 2a3f2fa..232265c 100644
+index cd67e80..29d8c5c 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -690,8 +689,8 @@ index 2a3f2fa..232265c 100644
 -#![feature(repr_align)]
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
- #![feature(alloc, allocator_api, global_allocator)]
-@@ -17,6 +16,12 @@ extern crate stack_vec;
+ #![feature(i128_type)]
+@@ -22,6 +21,12 @@ extern crate stack_vec;
  extern crate fat32;
  
  pub mod allocator;
@@ -704,7 +703,7 @@ index 2a3f2fa..232265c 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -32,9 +37,54 @@ use fs::FileSystem;
+@@ -39,10 +44,55 @@ use fs::FileSystem;
  pub static ALLOCATOR: Allocator = Allocator::uninitialized();
  
  pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
@@ -759,6 +758,7 @@ index 2a3f2fa..232265c 100644
 +    // hex();
 +    shell::shell("$ ");
  }
+ 
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
 index 3a1e46f..83848e3 100644
 --- a/kernel/src/lang_items.rs
@@ -782,19 +782,20 @@ index 3a1e46f..83848e3 100644
 +#[lang = "eh_personality"]
 +pub extern "C" fn eh_personality() {}
 diff --git a/kernel/src/mutex.rs b/kernel/src/mutex.rs
-index e52b172..394015f 100644
+index 79fba5f..16913c2 100644
 --- a/kernel/src/mutex.rs
 +++ b/kernel/src/mutex.rs
-@@ -1,6 +1,6 @@
- use std::sync::atomic::{AtomicBool, Ordering};
+@@ -1,7 +1,7 @@
+ use std::sync::atomic::{AtomicBool, AtomicUsize};
+ use std::sync::atomic::Ordering::Relaxed;
  use std::cell::UnsafeCell;
 -use std::ops::{DerefMut, Deref, Drop};
 +use std::ops::{Deref, DerefMut, Drop};
  use std::fmt;
  
  #[repr(align(32))]
-@@ -9,21 +9,21 @@ pub struct Mutex<T> {
-     lock: AtomicBool,
+@@ -11,22 +11,22 @@ pub struct Mutex<T> {
+     owner: AtomicUsize
  }
  
 -unsafe impl<T: Send> Send for Mutex<T> { }
@@ -816,12 +817,13 @@ index e52b172..394015f 100644
      pub const fn new(val: T) -> Mutex<T> {
          Mutex {
              lock: AtomicBool::new(false),
+             owner: AtomicUsize::new(usize::max_value()),
 -            data: UnsafeCell::new(val)
 +            data: UnsafeCell::new(val),
          }
      }
  }
-@@ -48,7 +48,7 @@ impl<T> Mutex<T> {
+@@ -53,7 +53,7 @@ impl<T> Mutex<T> {
          loop {
              match self.try_lock() {
                  Some(guard) => return guard,
@@ -830,7 +832,7 @@ index e52b172..394015f 100644
              }
          }
      }
-@@ -62,7 +62,7 @@ impl<'a, T: 'a> Deref for MutexGuard<'a, T> {
+@@ -67,7 +67,7 @@ impl<'a, T: 'a> Deref for MutexGuard<'a, T> {
      type Target = T;
  
      fn deref(&self) -> &T {
@@ -839,7 +841,7 @@ index e52b172..394015f 100644
      }
  }
  
-@@ -82,7 +82,7 @@ impl<T: fmt::Debug> fmt::Debug for Mutex<T> {
+@@ -87,7 +87,7 @@ impl<T: fmt::Debug> fmt::Debug for Mutex<T> {
      fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
          match self.try_lock() {
              Some(guard) => f.debug_struct("Mutex").field("data", &&*guard).finish(),
@@ -849,14 +851,15 @@ index e52b172..394015f 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index 03fb8fb..fc2ec13 100644
+index a3ad171..0174752 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,44 @@
+@@ -1,16 +1,45 @@
 -use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::path::{Path, PathBuf};
 +use pi::timer::{current_time, spin_sleep_ms};
++use pi::gpio::Gpio;
 +use pi::atags::Atags;
 +#[cfg(not(test))]
 +use ALLOCATOR;
@@ -900,7 +903,7 @@ index 03fb8fb..fc2ec13 100644
  }
  
  impl<'a> Command<'a> {
-@@ -21,10 +49,10 @@ impl<'a> Command<'a> {
+@@ -21,10 +50,10 @@ impl<'a> Command<'a> {
      ///
      /// If `s` contains no arguments, returns `Error::Empty`. If there are more
      /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
@@ -914,7 +917,7 @@ index 03fb8fb..fc2ec13 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +64,329 @@ impl<'a> Command<'a> {
+@@ -36,12 +65,340 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -924,9 +927,11 @@ index 03fb8fb..fc2ec13 100644
  }
  
  /// Starts a shell using `prefix` as the prefix for each line. This function
- /// never returns: it is perpetually in a shell loop.
- pub fn shell(prefix: &str) -> ! {
+-/// returns if the `exit` command is called.
+-pub fn shell(prefix: &str) {
 -    unimplemented!()
++/// never returns: it is perpetually in a shell loop.
++pub fn shell(prefix: &str) -> ! {
 +    spin_sleep_ms(200); // wait a little time for client to attach
 +    kprintln!("{}", BANNER);
 +
@@ -946,6 +951,7 @@ index 03fb8fb..fc2ec13 100644
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => exit(&command),
++                    "gpio" => gpio(&command),
 +                    "ls" => ls(&command, cwd.as_path()),
 +                    "memstat" => memstat(&command),
 +                    "panic" => panic(&command),
@@ -1245,6 +1251,16 @@ index 03fb8fb..fc2ec13 100644
 +            Err(err) => kprintln!("Error reading file: {}", err),
 +        }
 +    }
++}
++
++fn gpio(command: &Command) {
++    if command.args.len() > 1 && command.args[1] == "on" {
++        let mut pin26 = Gpio::new(26).into_output();
++        pin26.set();
++    } else {
++        let mut pin26 = Gpio::new(26).into_output();
++        pin26.clear();
++    }
  }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
@@ -1437,7 +1453,7 @@ index f70bfb5..f914de1 100644
      }
  }
 diff --git a/pi/src/lib.rs b/pi/src/lib.rs
-index e6c8952..87b0252 100644
+index 27b295e..3d1e81a 100644
 --- a/pi/src/lib.rs
 +++ b/pi/src/lib.rs
 @@ -2,7 +2,6 @@
@@ -1449,10 +1465,10 @@ index e6c8952..87b0252 100644
  #![feature(never_type)]
  #![feature(pointer_methods)]
 diff --git a/pi/src/timer.rs b/pi/src/timer.rs
-index e0aa184..db60af2 100644
+index 0086c0b..76d534e 100644
 --- a/pi/src/timer.rs
 +++ b/pi/src/timer.rs
-@@ -30,21 +30,29 @@ impl Timer {
+@@ -30,7 +30,9 @@ impl Timer {
      /// Reads the system timer's counter and returns the 64-bit counter value.
      /// The returned value is the number of elapsed microseconds.
      pub fn read(&self) -> u64 {
@@ -1461,7 +1477,9 @@ index e0aa184..db60af2 100644
 +        let high = self.registers.CHI.read();
 +        ((high as u64) << 32) | (low as u64)
      }
- }
+ 
+     /// Sets up a match in timer 1 to occur `us` microseconds from now. If
+@@ -43,17 +45,23 @@ impl Timer {
  
  /// Returns the current time in microseconds.
  pub fn current_time() -> u64 {
@@ -1486,6 +1504,8 @@ index e0aa184..db60af2 100644
 -    unimplemented!()
 +    spin_sleep_us(ms * 1000);
  }
+ 
+ /// Sets up a match in timer 1 to occur `us` microseconds from now. If
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
 index 92b6159..91ca7a3 100644
 --- a/pi/src/uart.rs
