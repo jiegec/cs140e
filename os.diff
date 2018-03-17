@@ -146,6 +146,20 @@ index 3572bad..1ba62a0 100644
  CCFLAGS ?= -Wall -O2 -nostdlib -nostartfiles -ffreestanding -pie -fpie
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
  XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
+diff --git a/kernel/ext/init.S b/kernel/ext/init.S
+index 7941cd7..b1f69a4 100644
+--- a/kernel/ext/init.S
++++ b/kernel/ext/init.S
+@@ -81,6 +81,9 @@ switch_to_el1:
+     mov     x2, #0x3c5
+     msr     SPSR_EL2, x2
+     // FIXME: Return to EL1 at `set_stack`.
++    adr     x2, set_stack
++    msr     ELR_EL2, x2
++    eret
+ 
+ set_stack:
+     // set the current stack pointer
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
 index 5cde581..ff6c76a 100644
 --- a/kernel/src/allocator/bin.rs
@@ -679,7 +693,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index cd67e80..29d8c5c 100644
+index e9522cd..7623bd0 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -690,7 +704,7 @@ index cd67e80..29d8c5c 100644
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
  #![feature(i128_type)]
-@@ -22,6 +21,12 @@ extern crate stack_vec;
+@@ -23,6 +22,12 @@ extern crate stack_vec;
  extern crate fat32;
  
  pub mod allocator;
@@ -703,7 +717,7 @@ index cd67e80..29d8c5c 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -39,10 +44,55 @@ use fs::FileSystem;
+@@ -43,6 +48,43 @@ use process::GlobalScheduler;
  pub static ALLOCATOR: Allocator = Allocator::uninitialized();
  
  pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
@@ -745,7 +759,9 @@ index cd67e80..29d8c5c 100644
 +    }
 +}
  
- #[no_mangle]
+ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+ 
+@@ -50,4 +92,12 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -758,7 +774,6 @@ index cd67e80..29d8c5c 100644
 +    // hex();
 +    shell::shell("$ ");
  }
- 
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
 index 3a1e46f..83848e3 100644
 --- a/kernel/src/lang_items.rs
@@ -851,7 +866,7 @@ index 79fba5f..16913c2 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index a3ad171..0174752 100644
+index a3ad171..f2442dc 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,45 @@
@@ -917,7 +932,7 @@ index a3ad171..0174752 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +65,340 @@ impl<'a> Command<'a> {
+@@ -36,12 +65,365 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -927,11 +942,9 @@ index a3ad171..0174752 100644
  }
  
  /// Starts a shell using `prefix` as the prefix for each line. This function
--/// returns if the `exit` command is called.
--pub fn shell(prefix: &str) {
+ /// returns if the `exit` command is called.
+ pub fn shell(prefix: &str) {
 -    unimplemented!()
-+/// never returns: it is perpetually in a shell loop.
-+pub fn shell(prefix: &str) -> ! {
 +    spin_sleep_ms(200); // wait a little time for client to attach
 +    kprintln!("{}", BANNER);
 +
@@ -950,7 +963,7 @@ index a3ad171..0174752 100644
 +                    "cd" => cwd = cd(&command, cwd),
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
-+                    "exit" => exit(&command),
++                    "exit" => return,
 +                    "gpio" => gpio(&command),
 +                    "ls" => ls(&command, cwd.as_path()),
 +                    "memstat" => memstat(&command),
@@ -1132,6 +1145,7 @@ index a3ad171..0174752 100644
 +    );
 +}
 +
++/*
 +fn exit(_command: &Command) -> ! {
 +    kprintln!(
 +        "Might be dangerous: bootloader might be corrupted, especially when using bin allocator."
@@ -1146,6 +1160,7 @@ index a3ad171..0174752 100644
 +        }
 +    }
 +}
++*/
 +
 +fn panic(_command: &Command) -> ! {
 +    panic!("You ask me to panic!");
@@ -1254,13 +1269,36 @@ index a3ad171..0174752 100644
 +}
 +
 +fn gpio(command: &Command) {
-+    if command.args.len() > 1 && command.args[1] == "on" {
-+        let mut pin26 = Gpio::new(26).into_output();
-+        pin26.set();
-+    } else {
-+        let mut pin26 = Gpio::new(26).into_output();
-+        pin26.clear();
++    if command.args.len() != 3 {
++        kprintln!("Usage: gpio [pin] [set|clear|level]");
++        return;
 +    }
++
++    let pin_num = match command.args[1].parse() {
++        Ok(num) => num,
++        Err(err) => {
++            kprintln!("Unsupported pin number: {}", err);
++            return;
++        }
++    };
++
++    match command.args[2] {
++        "set" => {
++            let mut pin = Gpio::new(pin_num).into_output();
++            pin.set();
++            kprintln!("Pin {} set", pin_num);
++        }
++        "clear" => {
++            let mut pin = Gpio::new(pin_num).into_output();
++            pin.clear();
++            kprintln!("Pin {} cleared", pin_num);
++        }
++        "level" => {
++            let mut pin = Gpio::new(pin_num).into_input();
++            kprintln!("Pin {} level: {}", pin_num, pin.level());
++        }
++        op => kprintln!("Unsupported operation {}", op),
++    };
  }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
