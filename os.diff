@@ -134,7 +134,7 @@ index eadd84a..4f6690b 100644
  
  [profile.test]
 diff --git a/kernel/Makefile b/kernel/Makefile
-index 3572bad..1ba62a0 100644
+index 3572bad..be2aa78 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
 @@ -3,7 +3,7 @@ CROSS ?= $(TARGET)
@@ -146,11 +146,27 @@ index 3572bad..1ba62a0 100644
  CCFLAGS ?= -Wall -O2 -nostdlib -nostartfiles -ffreestanding -pie -fpie
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
  XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
+@@ -18,7 +18,7 @@ RUST_RELEASE_LIB := $(RUST_BUILD_DIR)/release/lib$(RUST_BINARY).a
+ 
+ RUST_LIB_DEPS = ../pi/src/* ../pi/src/*/** \
+ 				../../1-shell/stack-vec/src/* \
+-				../../2-fs/fat32/src/* ../../2-fs/fat32/src/*/**
++				../../2-fs/fat32/src/* ../../2-fs/fat32/src/*/** src/*/**
+ 
+ RUST_DEPS = Xargo.toml Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
+ EXT_DEPS = $(BUILD_DIR)/init.o
 diff --git a/kernel/ext/init.S b/kernel/ext/init.S
-index 7941cd7..b1f69a4 100644
+index 7941cd7..057a194 100644
 --- a/kernel/ext/init.S
 +++ b/kernel/ext/init.S
-@@ -81,6 +81,9 @@ switch_to_el1:
+@@ -76,11 +76,16 @@ switch_to_el1:
+ 
+     // set up exception handlers
+     // FIXME: load `_vectors` addr into appropriate register (guide: 10.4)
++    adr     x2, _vectors
++    msr     VBAR_EL1, x2
+ 
+     // change execution level to EL1 (ref: C5.2.19)
      mov     x2, #0x3c5
      msr     SPSR_EL2, x2
      // FIXME: Return to EL1 at `set_stack`.
@@ -160,6 +176,121 @@ index 7941cd7..b1f69a4 100644
  
  set_stack:
      // set the current stack pointer
+@@ -105,11 +110,93 @@ go_kmain:
+ 
+ context_save:
+     // FIXME: Save the remaining context to the stack.
++    // naive way
++    stp     x29, lr, [SP, #-16]! // put current lr in reserved
++    stp     x27, x28, [SP, #-16]!
++    stp     x25, x26, [SP, #-16]!
++    stp     x23, x24, [SP, #-16]!
++    stp     x21, x22, [SP, #-16]!
++    stp     x19, x20, [SP, #-16]!
++    stp     x17, x18, [SP, #-16]!
++    stp     x15, x16, [SP, #-16]!
++    stp     x13, x14, [SP, #-16]!
++    stp     x11, x12, [SP, #-16]!
++    stp     x9, x10, [SP, #-16]!
++    stp     x7, x8, [SP, #-16]!
++    stp     x5, x6, [SP, #-16]!
++    stp     x3, x4, [SP, #-16]!
++    stp     x1, x2, [SP, #-16]!
++
++    stp     q30, q31, [SP, #-32]!
++    stp     q28, q29, [SP, #-32]!
++    stp     q26, q27, [SP, #-32]!
++    stp     q24, q25, [SP, #-32]!
++    stp     q22, q23, [SP, #-32]!
++    stp     q20, q21, [SP, #-32]!
++    stp     q18, q19, [SP, #-32]!
++    stp     q16, q17, [SP, #-32]!
++    stp     q14, q15, [SP, #-32]!
++    stp     q12, q13, [SP, #-32]!
++    stp     q10, q11, [SP, #-32]!
++    stp     q8, q9, [SP, #-32]!
++    stp     q6, q7, [SP, #-32]!
++    stp     q4, q5, [SP, #-32]!
++    stp     q2, q3, [SP, #-32]!
++    stp     q0, q1, [SP, #-32]!
++
++    mrs x2, TPIDR_EL0
++    mrs x1, SP_EL0
++    stp     x1, x2, [SP, #-16]!
++    mrs x2, SPSR_EL1
++    mrs x1, ELR_EL1
++    stp     x1, x2, [SP, #-16]!
++
++    mrs x1, ESR_EL1 // esr
++    mov x2, sp // tf is sp
++    bl handle_exception
+ 
+ .global context_restore
+ context_restore:
+     // FIXME: Restore the context from the stack.
+-
++    ldp     x1, x2, [SP], #16
++    msr ELR_EL1, x1
++    msr SPSR_EL1, x2
++    ldp     x1, x2, [SP], #16
++    msr SP_EL0, x1
++    msr TPIDR_EL0, x2
++
++    ldp     q0, q1, [SP], #32
++    ldp     q2, q3, [SP], #32
++    ldp     q4, q5, [SP], #32
++    ldp     q6, q7, [SP], #32
++    ldp     q8, q9, [SP], #32
++    ldp     q10, q11, [SP], #32
++    ldp     q12, q13, [SP], #32
++    ldp     q14, q15, [SP], #32
++    ldp     q16, q17, [SP], #32
++    ldp     q18, q19, [SP], #32
++    ldp     q20, q21, [SP], #32
++    ldp     q22, q23, [SP], #32
++    ldp     q24, q25, [SP], #32
++    ldp     q26, q27, [SP], #32
++    ldp     q28, q29, [SP], #32
++    ldp     q30, q31, [SP], #32
++
++    ldp     x1, x2, [SP], #16
++    ldp     x3, x4, [SP], #16
++    ldp     x5, x6, [SP], #16
++    ldp     x7, x8, [SP], #16
++    ldp     x9, x10, [SP], #16
++    ldp     x11, x12, [SP], #16
++    ldp     x13, x14, [SP], #16
++    ldp     x15, x16, [SP], #16
++    ldp     x17, x18, [SP], #16
++    ldp     x19, x20, [SP], #16
++    ldp     x21, x22, [SP], #16
++    ldp     x23, x24, [SP], #16
++    ldp     x25, x26, [SP], #16
++    ldp     x27, x28, [SP], #16
++    ldp     x29, lr, [SP], #16 // get current lr from reserved.
+     ret
+ 
+ #define HANDLER(source, kind) \
+@@ -124,3 +211,19 @@ context_restore:
+ .align 11
+ _vectors:
+     // FIXME: Setup the 16 exception vectors.
++    HANDLER(0,0)
++    HANDLER(0,1)
++    HANDLER(0,2)
++    HANDLER(0,3)
++    HANDLER(1,0)
++    HANDLER(1,1)
++    HANDLER(1,2)
++    HANDLER(1,3)
++    HANDLER(2,0)
++    HANDLER(2,1)
++    HANDLER(2,2)
++    HANDLER(2,3)
++    HANDLER(3,0)
++    HANDLER(3,1)
++    HANDLER(3,2)
++    HANDLER(3,3)
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
 index 5cde581..ff6c76a 100644
 --- a/kernel/src/allocator/bin.rs
@@ -693,7 +824,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..4cc3a40 100644
+index e9522cd..6c216a5 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -704,7 +835,7 @@ index e9522cd..4cc3a40 100644
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
  #![feature(i128_type)]
-@@ -14,6 +13,7 @@
+@@ -14,15 +13,22 @@
  #![feature(naked_functions)]
  #![feature(fn_must_use)]
  #![feature(alloc, allocator_api, global_allocator)]
@@ -712,8 +843,11 @@ index e9522cd..4cc3a40 100644
  
  #[macro_use]
  #[allow(unused_imports)]
-@@ -23,6 +23,12 @@ extern crate stack_vec;
- extern crate fat32;
+ extern crate alloc;
++extern crate fat32;
+ extern crate pi;
+ extern crate stack_vec;
+-extern crate fat32;
  
  pub mod allocator;
 +use pi::gpio::Gpio;
@@ -769,7 +903,7 @@ index e9522cd..4cc3a40 100644
  
  pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  
-@@ -50,4 +93,12 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +93,14 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -780,7 +914,9 @@ index e9522cd..4cc3a40 100644
 +    // echo();
 +    // time();
 +    // hex();
-+    shell::shell("$ ");
++    loop {
++        shell::shell("$ ");
++    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
 index 3a1e46f..83848e3 100644
@@ -874,10 +1010,10 @@ index 79fba5f..16913c2 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index a3ad171..f2442dc 100644
+index a3ad171..44d2d43 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
-@@ -1,16 +1,45 @@
+@@ -1,16 +1,46 @@
 -use stack_vec::StackVec;
  use console::{kprint, kprintln, CONSOLE};
 +use std::path::{Path, PathBuf};
@@ -890,6 +1026,7 @@ index a3ad171..f2442dc 100644
 +use fat32::traits::{Dir, Entry, File, FileSystem, Metadata};
 +use std::io::Read;
 +use std::str;
++use aarch64;
  
  /// Error type for `Command` parse failures.
  #[derive(Debug)]
@@ -926,7 +1063,7 @@ index a3ad171..f2442dc 100644
  }
  
  impl<'a> Command<'a> {
-@@ -21,10 +50,10 @@ impl<'a> Command<'a> {
+@@ -21,10 +51,10 @@ impl<'a> Command<'a> {
      ///
      /// If `s` contains no arguments, returns `Error::Empty`. If there are more
      /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
@@ -940,7 +1077,7 @@ index a3ad171..f2442dc 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +65,365 @@ impl<'a> Command<'a> {
+@@ -36,12 +66,377 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -967,8 +1104,10 @@ index a3ad171..f2442dc 100644
 +                let path = command.path();
 +                match path {
 +                    "atags" => atags(&command),
++                    "brk" => brk(),
 +                    "cat" => cat(&command, cwd.as_path()),
 +                    "cd" => cwd = cd(&command, cwd),
++                    "current_el" => current_el(),
 +                    "echo" => echo(&command),
 +                    "echohex" => echohex(&command),
 +                    "exit" => return,
@@ -1307,6 +1446,187 @@ index a3ad171..f2442dc 100644
 +        }
 +        op => kprintln!("Unsupported operation {}", op),
 +    };
++}
++
++fn brk() {
++    unsafe {
++        asm!("brk 2" :::: "volatile");
++    }
++}
++
++fn current_el() {
++    kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
+ }
+diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
+index b66e46c..97f79f0 100644
+--- a/kernel/src/traps/mod.rs
++++ b/kernel/src/traps/mod.rs
+@@ -11,6 +11,7 @@ use console::kprintln;
+ use self::syndrome::Syndrome;
+ use self::irq::handle_irq;
+ use self::syscall::handle_syscall;
++use shell;
+ 
+ #[repr(u16)]
+ #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+@@ -42,6 +43,22 @@ pub struct Info {
+ /// the value of the exception syndrome register. Finally, `tf` is a pointer to
+ /// the trap frame for the exception.
+ #[no_mangle]
+-pub extern fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
+-    unimplemented!("handle_exception")
++pub extern "C" fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
++    let syndrome = Syndrome::from(esr);
++    if info.kind == Kind::Synchronous {
++        kprintln!("Sync Syndrome: {:?}", syndrome);
++        if let Syndrome::Brk(_) = syndrome {
++            shell::shell(" [brk]$ ");
++            tf.elr += 4; // Skip the current brk instruction
++        }
++    } else {
++        kprintln!(
++            "Unhandled exception with info: {:?}, syndrom: {:?}",
++            info,
++            syndrome
++        );
++        loop {
++            unsafe { asm!("wfe") }
++        }
++    }
+ }
+diff --git a/kernel/src/traps/syndrome.rs b/kernel/src/traps/syndrome.rs
+index 7ab7337..9e5bb78 100644
+--- a/kernel/src/traps/syndrome.rs
++++ b/kernel/src/traps/syndrome.rs
+@@ -6,12 +6,23 @@ pub enum Fault {
+     Permission,
+     Alignment,
+     TlbConflict,
+-    Other(u8)
++    Other(u8),
+ }
+ 
+ impl From<u32> for Fault {
+     fn from(val: u32) -> Fault {
+-        unimplemented!("From<u32> for Fault")
++        use self::Fault::*;
++
++        // ifsc or dfsc bits
++        match val & 0b111100 {
++            0b000000 => AddressSize,
++            0b000100 => Translation,
++            0b001000 => AccessFlag,
++            0b001100 => Permission,
++            0b100000 => Alignment,
++            0b110000 => TlbConflict,
++            _ => Other((val & 0b111111) as u8),
++        }
+     }
+ }
+ 
+@@ -30,15 +41,9 @@ pub enum Syndrome {
+     Hvc(u16),
+     Smc(u16),
+     MsrMrsSystem,
+-    InstructionAbort {
+-        kind: Fault,
+-        level: u8,
+-    },
++    InstructionAbort { kind: Fault, level: u8 },
+     PCAlignmentFault,
+-    DataAbort {
+-        kind: Fault,
+-        level: u8
+-    },
++    DataAbort { kind: Fault, level: u8 },
+     SpAlignmentFault,
+     TrappedFpu,
+     SError,
+@@ -46,7 +51,7 @@ pub enum Syndrome {
+     Step,
+     Watchpoint,
+     Brk(u16),
+-    Other(u32)
++    Other(u32),
+ }
+ 
+ /// Converts a raw syndrome value (ESR) into a `Syndrome` (ref: D1.10.4).
+@@ -54,6 +59,57 @@ impl From<u32> for Syndrome {
+     fn from(esr: u32) -> Syndrome {
+         use self::Syndrome::*;
+ 
+-        unimplemented!("From<u32> for Syndrome")
++        let exception_class = esr >> 26;
++        let iss = esr & 0xFFFFFF;
++
++        match exception_class {
++            0b000000 => Unknown,
++            0b000001 => WfiWfe,
++            0b000011 => McrMrc,
++            0b000100 => McrrMrrc,
++            0b000101 => McrMrc,
++            0b000110 => LdcStc,
++            0b000111 => SimdFp,
++            0b001000 => Vmrs,
++            0b001100 => Mrrc,
++            0b001110 => IllegalExecutionState,
++            0b010001 => Svc((iss & 0xFFFF) as u16),
++            0b010010 => Hvc((iss & 0xFFFF) as u16),
++            0b010011 => Smc((iss & 0xFFFF) as u16),
++            0b010101 => Svc((iss & 0xFFFF) as u16),
++            0b010110 => Hvc((iss & 0xFFFF) as u16),
++            0b010111 => Smc((iss & 0xFFFF) as u16),
++            0b011000 => MsrMrsSystem,
++            0b100000 => InstructionAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100001 => InstructionAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100010 => PCAlignmentFault,
++            0b100100 => DataAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100101 => DataAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100110 => SpAlignmentFault,
++            0b101000 => TrappedFpu,
++            0b101100 => TrappedFpu,
++            0b101111 => SError,
++            0b110000 => Breakpoint,
++            0b110001 => Breakpoint,
++            0b110010 => Step,
++            0b110011 => Step,
++            0b110100 => Watchpoint,
++            0b110101 => Watchpoint,
++            0b111000 => Breakpoint,
++            0b111100 => Brk((iss & 0xFFFF) as u16),
++            other => Other(other),
++        }
+     }
+ }
+diff --git a/kernel/src/traps/trap_frame.rs b/kernel/src/traps/trap_frame.rs
+index b608d7d..bf86349 100644
+--- a/kernel/src/traps/trap_frame.rs
++++ b/kernel/src/traps/trap_frame.rs
+@@ -2,4 +2,13 @@
+ #[derive(Default, Debug, Copy, Clone)]
+ pub struct TrapFrame {
+     // FIXME: Fill me in.
++    pub elr: u64,
++    spsr: u64,
++    sp: u64,
++    tpidr: u64,
++    q0to31: [u128; 32],
++    x1to29: [u64; 29],
++    __r1: u64,
++    x30: u64,
++    x0: u64,
  }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
