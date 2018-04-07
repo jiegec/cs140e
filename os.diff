@@ -693,7 +693,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..7623bd0 100644
+index e9522cd..4cc3a40 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -704,7 +704,15 @@ index e9522cd..7623bd0 100644
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
  #![feature(i128_type)]
-@@ -23,6 +22,12 @@ extern crate stack_vec;
+@@ -14,6 +13,7 @@
+ #![feature(naked_functions)]
+ #![feature(fn_must_use)]
+ #![feature(alloc, allocator_api, global_allocator)]
++#![feature(ptr_internals)]
+ 
+ #[macro_use]
+ #[allow(unused_imports)]
+@@ -23,6 +23,12 @@ extern crate stack_vec;
  extern crate fat32;
  
  pub mod allocator;
@@ -717,7 +725,7 @@ index e9522cd..7623bd0 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -43,6 +48,43 @@ use process::GlobalScheduler;
+@@ -43,6 +49,43 @@ use process::GlobalScheduler;
  pub static ALLOCATOR: Allocator = Allocator::uninitialized();
  
  pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
@@ -761,7 +769,7 @@ index e9522cd..7623bd0 100644
  
  pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  
-@@ -50,4 +92,12 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +93,12 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
