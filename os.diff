@@ -156,7 +156,7 @@ index 3572bad..be2aa78 100644
  RUST_DEPS = Xargo.toml Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
  EXT_DEPS = $(BUILD_DIR)/init.o
 diff --git a/kernel/ext/init.S b/kernel/ext/init.S
-index 7941cd7..057a194 100644
+index 7941cd7..a934073 100644
 --- a/kernel/ext/init.S
 +++ b/kernel/ext/init.S
 @@ -76,11 +76,16 @@ switch_to_el1:
@@ -176,7 +176,7 @@ index 7941cd7..057a194 100644
  
  set_stack:
      // set the current stack pointer
-@@ -105,11 +110,93 @@ go_kmain:
+@@ -105,11 +110,96 @@ go_kmain:
  
  context_save:
      // FIXME: Save the remaining context to the stack.
@@ -224,6 +224,9 @@ index 7941cd7..057a194 100644
 +    mrs x1, ESR_EL1 // esr
 +    mov x2, sp // tf is sp
 +    bl handle_exception
++
++    add     x1, sp, #800
++    ldr     lr, [x1, #-24] // get current lr from reserved.
  
  .global context_restore
  context_restore:
@@ -267,11 +270,11 @@ index 7941cd7..057a194 100644
 +    ldp     x23, x24, [SP], #16
 +    ldp     x25, x26, [SP], #16
 +    ldp     x27, x28, [SP], #16
-+    ldp     x29, lr, [SP], #16 // get current lr from reserved.
++    ldr     x29, [SP], #16
      ret
  
  #define HANDLER(source, kind) \
-@@ -124,3 +211,19 @@ context_restore:
+@@ -124,3 +214,19 @@ context_restore:
  .align 11
  _vectors:
      // FIXME: Setup the 16 exception vectors.
@@ -824,7 +827,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..6c216a5 100644
+index e9522cd..27807c9 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -859,61 +862,16 @@ index e9522cd..6c216a5 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -43,6 +49,43 @@ use process::GlobalScheduler;
- pub static ALLOCATOR: Allocator = Allocator::uninitialized();
- 
- pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
-+use console::{kprintln, CONSOLE};
-+
-+fn blinky() {
-+    let pin16 = Gpio::new(16);
-+    let mut pin_out16 = pin16.into_output();
-+
-+    loop {
-+        pin_out16.set();
-+        spin_sleep_ms(1000);
-+        pin_out16.clear();
-+        spin_sleep_ms(1000);
-+    }
-+}
-+
-+fn echo() {
-+    let mut uart = MiniUart::new();
-+
-+    loop {
-+        let byte = uart.read_byte();
-+        uart.write_byte(byte);
-+    }
-+}
-+
-+fn time() {
-+    loop {
-+        kprintln!("Current time: {}", current_time());
-+        spin_sleep_ms(1000);
-+    }
-+}
-+
-+fn hex() {
-+    let mut console = CONSOLE.lock();
-+    loop {
-+        let byte = console.read_byte();
-+        console.write_fmt(format_args!("{:#X}", byte)).unwrap();
-+    }
-+}
- 
- pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
- 
-@@ -50,4 +93,14 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +56,13 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
-+    spin_sleep_ms(200);
 +    FILE_SYSTEM.initialize();
-+    // FIXME: Start the shell.
-+    // blinky();
-+    // echo();
-+    // time();
-+    // hex();
++    spin_sleep_ms(200);
++    SCHEDULER.start();
++}
++
++pub extern "C" fn shell_thread() {
 +    loop {
 +        shell::shell("$ ");
 +    }
@@ -1009,8 +967,69 @@ index 79fba5f..16913c2 100644
          }
      }
  }
+diff --git a/kernel/src/process/process.rs b/kernel/src/process/process.rs
+index 3bf9b70..d8d6ba4 100644
+--- a/kernel/src/process/process.rs
++++ b/kernel/src/process/process.rs
+@@ -1,5 +1,5 @@
+ use traps::TrapFrame;
+-use process::{State, Stack};
++use process::{Stack, State};
+ 
+ /// Type alias for the type of a process ID.
+ pub type Id = u64;
+@@ -22,7 +22,14 @@ impl Process {
+     /// If enough memory could not be allocated to start the process, returns
+     /// `None`. Otherwise returns `Some` of the new `Process`.
+     pub fn new() -> Option<Process> {
+-        unimplemented!("Process::new()")
++        match Stack::new() {
++            Some(stack) => Some(Process {
++                trap_frame: Box::new(TrapFrame::default()),
++                stack,
++                state: State::Ready,
++            }),
++            None => None,
++        }
+     }
+ 
+     /// Returns `true` if this process is ready to be scheduled.
+diff --git a/kernel/src/process/scheduler.rs b/kernel/src/process/scheduler.rs
+index 669b464..7329604 100644
+--- a/kernel/src/process/scheduler.rs
++++ b/kernel/src/process/scheduler.rs
+@@ -3,6 +3,8 @@ use std::collections::VecDeque;
+ use mutex::Mutex;
+ use process::{Process, State, Id};
+ use traps::TrapFrame;
++use shell_thread;
++use console::kprintln;
+ 
+ /// The `tick` time.
+ // FIXME: When you're ready, change this to something more reasonable.
+@@ -37,7 +39,19 @@ impl GlobalScheduler {
+     /// using timer interrupt based preemptive scheduling. This method should
+     /// not return under normal conditions.
+     pub fn start(&self) {
+-        unimplemented!("GlobalScheduler::start()")
++        let mut process = Process::new().unwrap();
++        process.trap_frame.sp = process.stack.top().as_u64();
++        process.trap_frame.elr = shell_thread as *mut u8 as u64;
++        process.trap_frame.spsr = 0b1111_00_0000; // To EL 0, currently masking IRQ
++        unsafe {
++            asm!("mov sp, $0
++                  bl context_restore
++                  adr x1, _start
++                  mov sp, x1
++                  mov x1, xzr
++                  mov lr, xzr
++                  eret" :: "r"(&*process.trap_frame) :: "volatile");
++        }
+     }
+ }
+ 
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index a3ad171..44d2d43 100644
+index a3ad171..3a36a1a 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,46 @@
@@ -1077,7 +1096,7 @@ index a3ad171..44d2d43 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +66,377 @@ impl<'a> Command<'a> {
+@@ -36,12 +66,378 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -1455,10 +1474,11 @@ index a3ad171..44d2d43 100644
 +}
 +
 +fn current_el() {
-+    kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
++    // Does not work if CurrentEL is 0
++    // kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
  }
 diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..97f79f0 100644
+index b66e46c..cf6ede9 100644
 --- a/kernel/src/traps/mod.rs
 +++ b/kernel/src/traps/mod.rs
 @@ -11,6 +11,7 @@ use console::kprintln;
@@ -1469,7 +1489,7 @@ index b66e46c..97f79f0 100644
  
  #[repr(u16)]
  #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-@@ -42,6 +43,22 @@ pub struct Info {
+@@ -42,6 +43,21 @@ pub struct Info {
  /// the value of the exception syndrome register. Finally, `tf` is a pointer to
  /// the trap frame for the exception.
  #[no_mangle]
@@ -1477,17 +1497,16 @@ index b66e46c..97f79f0 100644
 -    unimplemented!("handle_exception")
 +pub extern "C" fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
 +    let syndrome = Syndrome::from(esr);
-+    if info.kind == Kind::Synchronous {
-+        kprintln!("Sync Syndrome: {:?}", syndrome);
-+        if let Syndrome::Brk(_) = syndrome {
-+            shell::shell(" [brk]$ ");
-+            tf.elr += 4; // Skip the current brk instruction
-+        }
++    if let Syndrome::Brk(brk) = syndrome {
++        kprintln!("Got {:?} from {:?}", syndrome, info.source);
++        shell::shell(" [brk]$ ");
++        tf.elr += 4; // Skip the current brk instruction
 +    } else {
 +        kprintln!(
-+            "Unhandled exception with info: {:?}, syndrom: {:?}",
++            "Unhandled exception with info: {:?}, syndrome: {:?}, tf: {:?}",
 +            info,
-+            syndrome
++            syndrome,
++            tf
 +        );
 +        loop {
 +            unsafe { asm!("wfe") }
@@ -1611,7 +1630,7 @@ index 7ab7337..9e5bb78 100644
      }
  }
 diff --git a/kernel/src/traps/trap_frame.rs b/kernel/src/traps/trap_frame.rs
-index b608d7d..bf86349 100644
+index b608d7d..4b35bd3 100644
 --- a/kernel/src/traps/trap_frame.rs
 +++ b/kernel/src/traps/trap_frame.rs
 @@ -2,4 +2,13 @@
@@ -1619,14 +1638,14 @@ index b608d7d..bf86349 100644
  pub struct TrapFrame {
      // FIXME: Fill me in.
 +    pub elr: u64,
-+    spsr: u64,
-+    sp: u64,
-+    tpidr: u64,
-+    q0to31: [u128; 32],
-+    x1to29: [u64; 29],
-+    __r1: u64,
-+    x30: u64,
-+    x0: u64,
++    pub spsr: u64,
++    pub sp: u64,
++    pub tpidr: u64,
++    pub q0to31: [u128; 32],
++    pub x1to29: [u64; 29],
++    pub __r1: u64, // may be used to store lr temporaily
++    pub x30: u64,
++    pub x0: u64,
  }
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
