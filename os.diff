@@ -995,27 +995,30 @@ index 3bf9b70..d8d6ba4 100644
  
      /// Returns `true` if this process is ready to be scheduled.
 diff --git a/kernel/src/process/scheduler.rs b/kernel/src/process/scheduler.rs
-index 669b464..7329604 100644
+index 669b464..e46dcdf 100644
 --- a/kernel/src/process/scheduler.rs
 +++ b/kernel/src/process/scheduler.rs
-@@ -3,6 +3,8 @@ use std::collections::VecDeque;
+@@ -3,6 +3,9 @@ use std::collections::VecDeque;
  use mutex::Mutex;
  use process::{Process, State, Id};
  use traps::TrapFrame;
 +use shell_thread;
-+use console::kprintln;
++use pi::interrupt::{Controller, Interrupt};
++use pi::timer::tick_in;
  
  /// The `tick` time.
  // FIXME: When you're ready, change this to something more reasonable.
-@@ -37,7 +39,19 @@ impl GlobalScheduler {
+@@ -37,7 +40,21 @@ impl GlobalScheduler {
      /// using timer interrupt based preemptive scheduling. This method should
      /// not return under normal conditions.
      pub fn start(&self) {
 -        unimplemented!("GlobalScheduler::start()")
++        Controller::new().enable(Interrupt::Timer1);
++        tick_in(TICK);
 +        let mut process = Process::new().unwrap();
 +        process.trap_frame.sp = process.stack.top().as_u64();
 +        process.trap_frame.elr = shell_thread as *mut u8 as u64;
-+        process.trap_frame.spsr = 0b1111_00_0000; // To EL 0, currently masking IRQ
++        process.trap_frame.spsr = 0b1101_00_0000; // To EL 0, currently only unmasking IRQ
 +        unsafe {
 +            asm!("mov sp, $0
 +                  bl context_restore
@@ -1477,8 +1480,28 @@ index a3ad171..3a36a1a 100644
 +    // Does not work if CurrentEL is 0
 +    // kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
  }
+diff --git a/kernel/src/traps/irq.rs b/kernel/src/traps/irq.rs
+index 3d92f03..8fea78d 100644
+--- a/kernel/src/traps/irq.rs
++++ b/kernel/src/traps/irq.rs
+@@ -1,7 +1,14 @@
+ use pi::interrupt::Interrupt;
+ 
+ use traps::TrapFrame;
++use pi::timer::tick_in;
++use process::TICK;
+ 
+ pub fn handle_irq(interrupt: Interrupt, tf: &mut TrapFrame) {
+-    unimplemented!("handle_irq()")
++    match interrupt {
++        Interrupt::Timer1 => {
++            tick_in(TICK);
++        }
++        _ => unimplemented!("handle_irq()"),
++    }
+ }
 diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..cf6ede9 100644
+index b66e46c..ba3285c 100644
 --- a/kernel/src/traps/mod.rs
 +++ b/kernel/src/traps/mod.rs
 @@ -11,6 +11,7 @@ use console::kprintln;
@@ -1489,7 +1512,7 @@ index b66e46c..cf6ede9 100644
  
  #[repr(u16)]
  #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-@@ -42,6 +43,21 @@ pub struct Info {
+@@ -42,6 +43,34 @@ pub struct Info {
  /// the value of the exception syndrome register. Finally, `tf` is a pointer to
  /// the trap frame for the exception.
  #[no_mangle]
@@ -1497,20 +1520,33 @@ index b66e46c..cf6ede9 100644
 -    unimplemented!("handle_exception")
 +pub extern "C" fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
 +    let syndrome = Syndrome::from(esr);
-+    if let Syndrome::Brk(brk) = syndrome {
-+        kprintln!("Got {:?} from {:?}", syndrome, info.source);
-+        shell::shell(" [brk]$ ");
-+        tf.elr += 4; // Skip the current brk instruction
-+    } else {
-+        kprintln!(
-+            "Unhandled exception with info: {:?}, syndrome: {:?}, tf: {:?}",
-+            info,
-+            syndrome,
-+            tf
-+        );
-+        loop {
-+            unsafe { asm!("wfe") }
++    if info.kind == Kind::Synchronous {
++        // syndrome is only valid with sync
++        if let Syndrome::Brk(_) = syndrome {
++            kprintln!("Got {:?} from {:?}", syndrome, info.source);
++            shell::shell(" [brk]$ ");
++
++            tf.elr += 4; // Skip the current brk instruction
++            return;
 +        }
++    } else if info.kind == Kind::Irq {
++        let controller = Controller::new();
++        use self::Interrupt::*;
++        for interrupt in [Timer1, Timer3, Usb, Gpio0, Gpio1, Gpio2, Gpio3, Uart].iter() {
++            if controller.is_pending(*interrupt) {
++                handle_irq(*interrupt, tf);
++            }
++        }
++        return;
++    }
++    kprintln!(
++        "Unhandled exception with info: {:?}, syndrome: {:?}, tf: {:?}",
++        info,
++        syndrome,
++        tf
++    );
++    loop {
++        unsafe { asm!("wfe") }
 +    }
  }
 diff --git a/kernel/src/traps/syndrome.rs b/kernel/src/traps/syndrome.rs
@@ -1837,6 +1873,53 @@ index f70bfb5..f914de1 100644
 +        self.registers.LEV[(self.pin / 32) as usize].has_mask(1 << (self.pin % 32))
      }
  }
+diff --git a/pi/src/interrupt.rs b/pi/src/interrupt.rs
+index 33eb61d..7d1ea63 100644
+--- a/pi/src/interrupt.rs
++++ b/pi/src/interrupt.rs
+@@ -4,7 +4,7 @@ use volatile::{Volatile, ReadVolatile};
+ 
+ const INT_BASE: usize = IO_BASE + 0xB000 + 0x200;
+ 
+-#[derive(Copy, Clone, PartialEq)]
++#[derive(Copy, Clone, PartialEq, Debug)]
+ pub enum Interrupt {
+     Timer1 = 1,
+     Timer3 = 3,
+@@ -20,6 +20,13 @@ pub enum Interrupt {
+ #[allow(non_snake_case)]
+ struct Registers {
+     // FIXME: Fill me in.
++    IRQBasicPending: ReadVolatile<u32>,
++    IRQPending: [ReadVolatile<u32>; 2],
++    FIQControl: Volatile<u32>,
++    EnableIRQ: [Volatile<u32>; 2],
++    EnableBasicIRQ: Volatile<u32>,
++    DisableIRQ: [Volatile<u32>; 2],
++    DisableBasicIRQ: Volatile<u32>,
+ }
+ 
+ /// An interrupt controller. Used to enable and disable interrupts as well as to
+@@ -38,16 +45,16 @@ impl Controller {
+ 
+     /// Enables the interrupt `int`.
+     pub fn enable(&mut self, int: Interrupt) {
+-        unimplemented!()
++        self.registers.EnableIRQ[int as usize / 32].write(1 << (int as usize) % 32);
+     }
+ 
+     /// Disables the interrupt `int`.
+     pub fn disable(&mut self, int: Interrupt) {
+-        unimplemented!()
++        self.registers.DisableIRQ[int as usize / 32].write(1 << (int as usize) % 32);
+     }
+ 
+     /// Returns `true` if `int` is pending. Otherwise, returns `false`.
+     pub fn is_pending(&self, int: Interrupt) -> bool {
+-        unimplemented!()
++        self.registers.IRQPending[int as usize / 32].has_mask(1 << (int as usize) % 32)
+     }
+ }
 diff --git a/pi/src/lib.rs b/pi/src/lib.rs
 index 27b295e..3d1e81a 100644
 --- a/pi/src/lib.rs
@@ -1850,10 +1933,10 @@ index 27b295e..3d1e81a 100644
  #![feature(never_type)]
  #![feature(pointer_methods)]
 diff --git a/pi/src/timer.rs b/pi/src/timer.rs
-index 0086c0b..76d534e 100644
+index 0086c0b..42f034c 100644
 --- a/pi/src/timer.rs
 +++ b/pi/src/timer.rs
-@@ -30,7 +30,9 @@ impl Timer {
+@@ -30,35 +30,46 @@ impl Timer {
      /// Reads the system timer's counter and returns the 64-bit counter value.
      /// The returned value is the number of elapsed microseconds.
      pub fn read(&self) -> u64 {
@@ -1864,7 +1947,16 @@ index 0086c0b..76d534e 100644
      }
  
      /// Sets up a match in timer 1 to occur `us` microseconds from now. If
-@@ -43,17 +45,23 @@ impl Timer {
+     /// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
+     /// interrupt will be issued in `us` microseconds.
+     pub fn tick_in(&mut self, us: u32) {
+-        unimplemented!()
++        let current_low = self.registers.CLO.read();
++        let compare = current_low.wrapping_add(us);
++        self.registers.COMPARE[1].write(compare); // timer 1
++        self.registers.CS.or_mask(0b0010); // clear timer 1 interrupt
+     }
+ }
  
  /// Returns the current time in microseconds.
  pub fn current_time() -> u64 {
@@ -1891,6 +1983,12 @@ index 0086c0b..76d534e 100644
  }
  
  /// Sets up a match in timer 1 to occur `us` microseconds from now. If
+ /// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
+ /// interrupt will be issued in `us` microseconds.
+ pub fn tick_in(us: u32) {
+-    unimplemented!()
++    Timer::new().tick_in(us)
+ }
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
 index 92b6159..91ca7a3 100644
 --- a/pi/src/uart.rs
