@@ -828,7 +828,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..d87c1fe 100644
+index e9522cd..db26f88 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -880,7 +880,7 @@ index e9522cd..d87c1fe 100644
 +
 +pub extern "C" fn shell_thread_2() {
 +    loop {
-+        shell::shell("# ");
++        // shell::shell("# ");
 +    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
@@ -1027,10 +1027,10 @@ index 3bf9b70..b7f69a9 100644
      }
  }
 diff --git a/kernel/src/process/scheduler.rs b/kernel/src/process/scheduler.rs
-index 669b464..28ac692 100644
+index 669b464..c99652b 100644
 --- a/kernel/src/process/scheduler.rs
 +++ b/kernel/src/process/scheduler.rs
-@@ -1,8 +1,12 @@
+@@ -1,12 +1,17 @@
  use std::collections::VecDeque;
  
  use mutex::Mutex;
@@ -1044,7 +1044,13 @@ index 669b464..28ac692 100644
  
  /// The `tick` time.
  // FIXME: When you're ready, change this to something more reasonable.
-@@ -21,7 +25,11 @@ impl GlobalScheduler {
+-pub const TICK: u32 = 2 * 1000 * 1000;
++// pub const TICK: u32 = 2 * 1000 * 1000;
++pub const TICK: u32 = 10 * 1000; // 10ms
+ 
+ /// Process scheduler for the entire machine.
+ #[derive(Debug)]
+@@ -21,7 +26,11 @@ impl GlobalScheduler {
      /// Adds a process to the scheduler's queue and returns that process's ID.
      /// For more details, see the documentation on `Scheduler::add()`.
      pub fn add(&self, process: Process) -> Option<Id> {
@@ -1057,7 +1063,7 @@ index 669b464..28ac692 100644
      }
  
      /// Performs a context switch using `tf` by setting the state of the current
-@@ -30,14 +38,42 @@ impl GlobalScheduler {
+@@ -30,14 +39,42 @@ impl GlobalScheduler {
      /// the documentation on `Scheduler::switch()`.
      #[must_use]
      pub fn switch(&self, new_state: State, tf: &mut TrapFrame) -> Option<Id> {
@@ -1102,7 +1108,7 @@ index 669b464..28ac692 100644
      }
  }
  
-@@ -51,7 +87,11 @@ struct Scheduler {
+@@ -51,7 +88,11 @@ struct Scheduler {
  impl Scheduler {
      /// Returns a new `Scheduler` with an empty queue.
      fn new() -> Scheduler {
@@ -1115,7 +1121,7 @@ index 669b464..28ac692 100644
      }
  
      /// Adds a process to the scheduler's queue and returns that process's ID if
-@@ -63,7 +103,18 @@ impl Scheduler {
+@@ -63,7 +104,18 @@ impl Scheduler {
      /// It is the caller's responsibility to ensure that the first time `switch`
      /// is called, that process is executing on the CPU.
      fn add(&mut self, mut process: Process) -> Option<Id> {
@@ -1135,7 +1141,7 @@ index 669b464..28ac692 100644
      }
  
      /// Sets the current process's state to `new_state`, finds the next process
-@@ -75,6 +126,25 @@ impl Scheduler {
+@@ -75,6 +127,30 @@ impl Scheduler {
      /// This method blocks until there is a process to switch to, conserving
      /// energy as much as possible in the interim.
      fn switch(&mut self, new_state: State, tf: &mut TrapFrame) -> Option<Id> {
@@ -1150,12 +1156,17 @@ index 669b464..28ac692 100644
 +        self.processes.push_back(process);
 +
 +        loop {
-+            for new_process in self.processes.iter_mut() {
++            let num_processes = self.processes.len();
++            for _ in 0..num_processes {
++                let mut new_process = self.processes.pop_front().unwrap();
 +                if new_process.is_ready() {
 +                    *tf = *new_process.trap_frame;
 +                    new_process.state = State::Running;
 +                    self.current = Some(tf.tpidr);
-+                    return Some(new_process.trap_frame.tpidr);
++                    self.processes.push_front(new_process);
++                    return self.current;
++                } else {
++                    self.processes.push_back(new_process);
 +                }
 +            }
 +            unsafe { asm!("wfi") }
@@ -1163,7 +1174,7 @@ index 669b464..28ac692 100644
      }
  }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index a3ad171..3a36a1a 100644
+index a3ad171..d7d15ea 100644
 --- a/kernel/src/shell.rs
 +++ b/kernel/src/shell.rs
 @@ -1,16 +1,46 @@
@@ -1230,7 +1241,7 @@ index a3ad171..3a36a1a 100644
          }
  
          if args.is_empty() {
-@@ -36,12 +66,378 @@ impl<'a> Command<'a> {
+@@ -36,12 +66,406 @@ impl<'a> Command<'a> {
  
      /// Returns this command's path. This is equivalent to the first argument.
      fn path(&self) -> &str {
@@ -1269,6 +1280,7 @@ index a3ad171..3a36a1a 100644
 +                    "memstat" => memstat(&command),
 +                    "panic" => panic(&command),
 +                    "pwd" => pwd(&command, cwd.as_path()),
++                    "sleep" => sleep(&command),
 +                    "uptime" => uptime(&command),
 +                    _ => kprintln!("unknown command: {}", path),
 +                }
@@ -1470,7 +1482,7 @@ index a3ad171..3a36a1a 100644
 +    for atag in Atags::get() {
 +        kprintln!("{:?}", atag);
 +    }
-+}
+ }
 +
 +fn memstat(_command: &Command) {
 +    #[cfg(not(test))]
@@ -1610,12 +1622,40 @@ index a3ad171..3a36a1a 100644
 +fn current_el() {
 +    // Does not work if CurrentEL is 0
 +    // kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
- }
++}
++
++fn sleep(command: &Command) {
++    if command.args.len() > 2 {
++        kprintln!("Usage: sleep [time] ");
++    }
++    let time = if command.args.len() == 1 {
++        1000
++    } else {
++        command.args[1].parse().unwrap_or(1000)
++    };
++    let error: u64;
++    let time_elapsed: u64;
++    unsafe {
++        asm!("mov x0, $2
++              svc 1
++              mov $0, x0
++              mov $1, x7"
++              : "=r"(time_elapsed), "=r"(error)
++              : "r"(time)
++              : "x0", "x7")
++    }
++    if error != 0 {
++        kprintln!("Failed with {}", error);
++    } else {
++        kprintln!("Slept for {} msec", time_elapsed);
++    }
++}
+\ No newline at end of file
 diff --git a/kernel/src/traps/irq.rs b/kernel/src/traps/irq.rs
-index 3d92f03..7ee86ac 100644
+index 3d92f03..e9ca6ea 100644
 --- a/kernel/src/traps/irq.rs
 +++ b/kernel/src/traps/irq.rs
-@@ -1,7 +1,18 @@
+@@ -1,7 +1,17 @@
  use pi::interrupt::Interrupt;
  
  use traps::TrapFrame;
@@ -1623,7 +1663,6 @@ index 3d92f03..7ee86ac 100644
 +use pi::timer::tick_in;
 +use process::TICK;
 +use SCHEDULER;
-+use console::kprintln;
  
  pub fn handle_irq(interrupt: Interrupt, tf: &mut TrapFrame) {
 -    unimplemented!("handle_irq()")
@@ -1636,7 +1675,7 @@ index 3d92f03..7ee86ac 100644
 +    }
  }
 diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..94328e2 100644
+index b66e46c..53c14df 100644
 --- a/kernel/src/traps/mod.rs
 +++ b/kernel/src/traps/mod.rs
 @@ -11,6 +11,7 @@ use console::kprintln;
@@ -1647,7 +1686,7 @@ index b66e46c..94328e2 100644
  
  #[repr(u16)]
  #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-@@ -42,6 +43,34 @@ pub struct Info {
+@@ -42,6 +43,41 @@ pub struct Info {
  /// the value of the exception syndrome register. Finally, `tf` is a pointer to
  /// the trap frame for the exception.
  #[no_mangle]
@@ -1657,12 +1696,19 @@ index b66e46c..94328e2 100644
 +    let syndrome = Syndrome::from(esr);
 +    if info.kind == Kind::Synchronous {
 +        // syndrome is only valid with sync
-+        if let Syndrome::Brk(_) = syndrome {
-+            kprintln!("Got {:?} from {:?}", syndrome, info.source);
-+            shell::shell(" [brk]$ ");
++        match syndrome {
++            Syndrome::Brk(_) => {
++                kprintln!("Got {:?} from {:?}", syndrome, info.source);
++                shell::shell(" [brk]$ ");
 +
-+            tf.elr += 4; // Skip the current brk instruction
-+            return;
++                tf.elr += 4; // Skip the current brk instruction
++                return;
++            }
++            Syndrome::Svc(syscall) => {
++                handle_syscall(syscall, tf);
++                return;
++            }
++            _ => {}
 +        }
 +    } else if info.kind == Kind::Irq {
 +        let controller = Controller::new();
@@ -1799,6 +1845,50 @@ index 7ab7337..9e5bb78 100644
 +            other => Other(other),
 +        }
      }
+ }
+diff --git a/kernel/src/traps/syscall.rs b/kernel/src/traps/syscall.rs
+index b6d0abc..066b7ad 100644
+--- a/kernel/src/traps/syscall.rs
++++ b/kernel/src/traps/syscall.rs
+@@ -1,4 +1,8 @@
+ use traps::TrapFrame;
++use pi::timer::current_time;
++use SCHEDULER;
++use process::State;
++use process::Process;
+ 
+ /// Sleep for `ms` milliseconds.
+ ///
+@@ -8,9 +12,28 @@ use traps::TrapFrame;
+ /// parameter: the approximate true elapsed time from when `sleep` was called to
+ /// when `sleep` returned.
+ pub fn sleep(ms: u32, tf: &mut TrapFrame) {
+-    unimplemented!("syscall: sleep()")
++    let begin = current_time();
++    let time = begin + ms as u64 * 1000;
++    let polling_fn = Box::new(move |process: &mut Process| {
++        let current = current_time();
++        if current > time {
++            process.trap_frame.x1to29[6] = 0; // x7 = 0; succeed
++            process.trap_frame.x0 = (current - begin) / 1000; // x0 = elapsed time in ms
++            true
++        } else {
++            false
++        }
++    });
++    SCHEDULER.switch(State::Waiting(polling_fn), tf).unwrap();
+ }
+ 
+ pub fn handle_syscall(num: u16, tf: &mut TrapFrame) {
+-    unimplemented!("handle_syscall()")
++    match num {
++        1 => {
++            sleep(tf.x0 as u32, tf);
++        }
++        _ => {
++            tf.x1to29[6] = 1; // x7 = 1, do not exist
++        }
++    }
  }
 diff --git a/kernel/src/traps/trap_frame.rs b/kernel/src/traps/trap_frame.rs
 index b608d7d..4b35bd3 100644
