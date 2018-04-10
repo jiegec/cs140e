@@ -156,7 +156,7 @@ index 3572bad..be2aa78 100644
  RUST_DEPS = Xargo.toml Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
  EXT_DEPS = $(BUILD_DIR)/init.o
 diff --git a/kernel/ext/init.S b/kernel/ext/init.S
-index 7941cd7..a934073 100644
+index 7941cd7..740a6e5 100644
 --- a/kernel/ext/init.S
 +++ b/kernel/ext/init.S
 @@ -76,11 +76,16 @@ switch_to_el1:
@@ -176,7 +176,7 @@ index 7941cd7..a934073 100644
  
  set_stack:
      // set the current stack pointer
-@@ -105,11 +110,96 @@ go_kmain:
+@@ -105,11 +110,97 @@ go_kmain:
  
  context_save:
      // FIXME: Save the remaining context to the stack.
@@ -223,10 +223,11 @@ index 7941cd7..a934073 100644
 +
 +    mrs x1, ESR_EL1 // esr
 +    mov x2, sp // tf is sp
++
++    mov x28, lr // save lr to a callee-saved register
 +    bl handle_exception
 +
-+    add     x1, sp, #800
-+    ldr     lr, [x1, #-24] // get current lr from reserved.
++    mov lr, x28 // get current lr from r28.
  
  .global context_restore
  context_restore:
@@ -274,7 +275,7 @@ index 7941cd7..a934073 100644
      ret
  
  #define HANDLER(source, kind) \
-@@ -124,3 +214,19 @@ context_restore:
+@@ -124,3 +215,19 @@ context_restore:
  .align 11
  _vectors:
      // FIXME: Setup the 16 exception vectors.
@@ -827,7 +828,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..27807c9 100644
+index e9522cd..d87c1fe 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -862,7 +863,7 @@ index e9522cd..27807c9 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -50,4 +56,13 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +56,19 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -874,6 +875,12 @@ index e9522cd..27807c9 100644
 +pub extern "C" fn shell_thread() {
 +    loop {
 +        shell::shell("$ ");
++    }
++}
++
++pub extern "C" fn shell_thread_2() {
++    loop {
++        shell::shell("# ");
 +    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
@@ -968,17 +975,18 @@ index 79fba5f..16913c2 100644
      }
  }
 diff --git a/kernel/src/process/process.rs b/kernel/src/process/process.rs
-index 3bf9b70..d8d6ba4 100644
+index 3bf9b70..b7f69a9 100644
 --- a/kernel/src/process/process.rs
 +++ b/kernel/src/process/process.rs
-@@ -1,5 +1,5 @@
+@@ -1,5 +1,6 @@
  use traps::TrapFrame;
 -use process::{State, Stack};
 +use process::{Stack, State};
++use std::mem::replace;
  
  /// Type alias for the type of a process ID.
  pub type Id = u64;
-@@ -22,7 +22,14 @@ impl Process {
+@@ -22,7 +23,14 @@ impl Process {
      /// If enough memory could not be allocated to start the process, returns
      /// `None`. Otherwise returns `Some` of the new `Process`.
      pub fn new() -> Option<Process> {
@@ -994,43 +1002,166 @@ index 3bf9b70..d8d6ba4 100644
      }
  
      /// Returns `true` if this process is ready to be scheduled.
+@@ -40,6 +48,22 @@ impl Process {
+     ///
+     /// Returns `false` in all other cases.
+     pub fn is_ready(&mut self) -> bool {
+-        unimplemented!("Process::is_ready()")
++        if let State::Ready = self.state {
++            true
++        } else if let State::Running = self.state {
++            false
++        } else {
++            let state = replace(&mut self.state, State::Ready);
++            if let State::Waiting(mut event_poll_fn) = state {
++                if event_poll_fn(self) {
++                    true
++                } else {
++                    self.state = State::Waiting(event_poll_fn);
++                    false
++                }
++            } else {
++                unreachable!();
++            }
++        }
+     }
+ }
 diff --git a/kernel/src/process/scheduler.rs b/kernel/src/process/scheduler.rs
-index 669b464..e46dcdf 100644
+index 669b464..28ac692 100644
 --- a/kernel/src/process/scheduler.rs
 +++ b/kernel/src/process/scheduler.rs
-@@ -3,6 +3,9 @@ use std::collections::VecDeque;
+@@ -1,8 +1,12 @@
+ use std::collections::VecDeque;
+ 
  use mutex::Mutex;
- use process::{Process, State, Id};
+-use process::{Process, State, Id};
++use process::{Id, Process, State};
  use traps::TrapFrame;
 +use shell_thread;
++use shell_thread_2;
 +use pi::interrupt::{Controller, Interrupt};
 +use pi::timer::tick_in;
  
  /// The `tick` time.
  // FIXME: When you're ready, change this to something more reasonable.
-@@ -37,7 +40,21 @@ impl GlobalScheduler {
+@@ -21,7 +25,11 @@ impl GlobalScheduler {
+     /// Adds a process to the scheduler's queue and returns that process's ID.
+     /// For more details, see the documentation on `Scheduler::add()`.
+     pub fn add(&self, process: Process) -> Option<Id> {
+-        self.0.lock().as_mut().expect("scheduler uninitialized").add(process)
++        self.0
++            .lock()
++            .as_mut()
++            .expect("scheduler uninitialized")
++            .add(process)
+     }
+ 
+     /// Performs a context switch using `tf` by setting the state of the current
+@@ -30,14 +38,42 @@ impl GlobalScheduler {
+     /// the documentation on `Scheduler::switch()`.
+     #[must_use]
+     pub fn switch(&self, new_state: State, tf: &mut TrapFrame) -> Option<Id> {
+-        self.0.lock().as_mut().expect("scheduler uninitialized").switch(new_state, tf)
++        self.0
++            .lock()
++            .as_mut()
++            .expect("scheduler uninitialized")
++            .switch(new_state, tf)
+     }
+ 
+     /// Initializes the scheduler and starts executing processes in user space
      /// using timer interrupt based preemptive scheduling. This method should
      /// not return under normal conditions.
      pub fn start(&self) {
 -        unimplemented!("GlobalScheduler::start()")
++        let mut scheduler = Scheduler::new();
 +        Controller::new().enable(Interrupt::Timer1);
 +        tick_in(TICK);
++
 +        let mut process = Process::new().unwrap();
 +        process.trap_frame.sp = process.stack.top().as_u64();
 +        process.trap_frame.elr = shell_thread as *mut u8 as u64;
 +        process.trap_frame.spsr = 0b1101_00_0000; // To EL 0, currently only unmasking IRQ
++        scheduler.add(process).unwrap();
++
++        let mut process2 = Process::new().unwrap();
++        process2.trap_frame.sp = process2.stack.top().as_u64();
++        process2.trap_frame.elr = shell_thread_2 as *mut u8 as u64;
++        process2.trap_frame.spsr = 0b1101_00_0000; // To EL 0, currently only unmasking IRQ
++        scheduler.add(process2).unwrap();
++
++        *self.0.lock() = Some(scheduler);
 +        unsafe {
 +            asm!("mov sp, $0
-+                  bl context_restore
-+                  adr x1, _start
-+                  mov sp, x1
-+                  mov x1, xzr
-+                  mov lr, xzr
-+                  eret" :: "r"(&*process.trap_frame) :: "volatile");
-+        }
++              bl context_restore
++              adr lr, _start
++              mov sp, lr
++              mov lr, xzr
++              eret" :: "r"(&*(self.0.lock().as_mut().unwrap()).processes[0].trap_frame) :: "volatile");
++        };
      }
  }
  
+@@ -51,7 +87,11 @@ struct Scheduler {
+ impl Scheduler {
+     /// Returns a new `Scheduler` with an empty queue.
+     fn new() -> Scheduler {
+-        unimplemented!("Scheduler::new()")
++        Scheduler {
++            processes: VecDeque::new(),
++            current: None,
++            last_id: None,
++        }
+     }
+ 
+     /// Adds a process to the scheduler's queue and returns that process's ID if
+@@ -63,7 +103,18 @@ impl Scheduler {
+     /// It is the caller's responsibility to ensure that the first time `switch`
+     /// is called, that process is executing on the CPU.
+     fn add(&mut self, mut process: Process) -> Option<Id> {
+-        unimplemented!("Scheduler::add()")
++        let id = self.last_id.get_or_insert(0);
++
++        // FIXME: handle overflow
++        *id += 1;
++        process.trap_frame.tpidr = *id;
++        self.processes.push_back(process);
++
++        if let None = self.current {
++            self.current = Some(*id);
++        }
++
++        Some(*id)
+     }
+ 
+     /// Sets the current process's state to `new_state`, finds the next process
+@@ -75,6 +126,25 @@ impl Scheduler {
+     /// This method blocks until there is a process to switch to, conserving
+     /// energy as much as possible in the interim.
+     fn switch(&mut self, new_state: State, tf: &mut TrapFrame) -> Option<Id> {
+-        unimplemented!("Scheduler::switch()")
++        if self.current != Some(tf.tpidr) {
++            return None;
++        }
++
++        let mut process = self.processes.pop_front().unwrap();
++        process.state = new_state;
++        *process.trap_frame = *tf;
++        self.processes.push_back(process);
++
++        loop {
++            for new_process in self.processes.iter_mut() {
++                if new_process.is_ready() {
++                    *tf = *new_process.trap_frame;
++                    new_process.state = State::Running;
++                    self.current = Some(tf.tpidr);
++                    return Some(new_process.trap_frame.tpidr);
++                }
++            }
++            unsafe { asm!("wfi") }
++        }
+     }
+ }
 diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
 index a3ad171..3a36a1a 100644
 --- a/kernel/src/shell.rs
@@ -1481,27 +1612,31 @@ index a3ad171..3a36a1a 100644
 +    // kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
  }
 diff --git a/kernel/src/traps/irq.rs b/kernel/src/traps/irq.rs
-index 3d92f03..8fea78d 100644
+index 3d92f03..7ee86ac 100644
 --- a/kernel/src/traps/irq.rs
 +++ b/kernel/src/traps/irq.rs
-@@ -1,7 +1,14 @@
+@@ -1,7 +1,18 @@
  use pi::interrupt::Interrupt;
  
  use traps::TrapFrame;
++use process::State;
 +use pi::timer::tick_in;
 +use process::TICK;
++use SCHEDULER;
++use console::kprintln;
  
  pub fn handle_irq(interrupt: Interrupt, tf: &mut TrapFrame) {
 -    unimplemented!("handle_irq()")
 +    match interrupt {
 +        Interrupt::Timer1 => {
 +            tick_in(TICK);
++            SCHEDULER.switch(State::Ready, tf).unwrap();
 +        }
 +        _ => unimplemented!("handle_irq()"),
 +    }
  }
 diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..ba3285c 100644
+index b66e46c..94328e2 100644
 --- a/kernel/src/traps/mod.rs
 +++ b/kernel/src/traps/mod.rs
 @@ -11,6 +11,7 @@ use console::kprintln;
@@ -1535,9 +1670,9 @@ index b66e46c..ba3285c 100644
 +        for interrupt in [Timer1, Timer3, Usb, Gpio0, Gpio1, Gpio2, Gpio3, Uart].iter() {
 +            if controller.is_pending(*interrupt) {
 +                handle_irq(*interrupt, tf);
++                return;
 +            }
 +        }
-+        return;
 +    }
 +    kprintln!(
 +        "Unhandled exception with info: {:?}, syndrome: {:?}, tf: {:?}",
