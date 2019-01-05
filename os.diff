@@ -867,7 +867,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..a888900 100644
+index e9522cd..ffd405c 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -903,20 +903,22 @@ index e9522cd..a888900 100644
  pub mod fs;
  pub mod traps;
  pub mod aarch64;
-@@ -37,6 +39,7 @@ pub mod vm;
+@@ -37,6 +39,8 @@ pub mod vm;
  use allocator::Allocator;
  use fs::FileSystem;
  use process::GlobalScheduler;
++#[cfg(feature = "qemu")]
 +use pi::timer::Timer;
  
  #[cfg(not(test))]
  #[global_allocator]
-@@ -50,4 +53,20 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +54,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
++    #[cfg(feature = "qemu")]
 +    Timer::initialize();
-+    //FILE_SYSTEM.initialize();
++    FILE_SYSTEM.initialize();
 +    spin_sleep_ms(200);
 +    SCHEDULER.start();
 +}
@@ -929,7 +931,7 @@ index e9522cd..a888900 100644
 +
 +pub extern "C" fn shell_thread_2() {
 +    loop {
-+        // user::shell("# ");
++        user::timer();
 +    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
@@ -1246,18 +1248,21 @@ index 3d92f03..e9ca6ea 100644
 +    }
  }
 diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..5e0faa5 100644
+index b66e46c..d4afd3a 100644
 --- a/kernel/src/traps/mod.rs
 +++ b/kernel/src/traps/mod.rs
-@@ -11,6 +11,7 @@ use console::kprintln;
+@@ -11,6 +11,10 @@ use console::kprintln;
  use self::syndrome::Syndrome;
  use self::irq::handle_irq;
  use self::syscall::handle_syscall;
 +use user::shell as shell;
++
++#[cfg(feature = "qemu")]
++use pi::timer::Timer;
  
  #[repr(u16)]
  #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-@@ -42,6 +43,46 @@ pub struct Info {
+@@ -42,6 +46,49 @@ pub struct Info {
  /// the value of the exception syndrome register. Finally, `tf` is a pointer to
  /// the trap frame for the exception.
  #[no_mangle]
@@ -1290,10 +1295,13 @@ index b66e46c..5e0faa5 100644
 +                return;
 +            }
 +        }
-+        use pi::timer::Timer;
-+        if Timer::new().is_pending() {
-+            handle_irq(Timer1, tf);
-+            return;
++
++        #[cfg(feature = "qemu")]
++        {
++            if Timer::new().is_pending() {
++                handle_irq(Timer1, tf);
++                return;
++            }
 +        }
 +    }
 +    kprintln!(
@@ -1486,21 +1494,22 @@ index b608d7d..4b35bd3 100644
  }
 diff --git a/kernel/src/user/mod.rs b/kernel/src/user/mod.rs
 new file mode 100644
-index 0000000..aba9b20
+index 0000000..583e993
 --- /dev/null
 +++ b/kernel/src/user/mod.rs
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,5 @@
 +mod shell;
 +mod syscall;
 +
 +pub use self::shell::shell;
++pub use self::shell::timer;
 \ No newline at end of file
 diff --git a/kernel/src/user/shell.rs b/kernel/src/user/shell.rs
 new file mode 100644
-index 0000000..3d9453b
+index 0000000..226017d
 --- /dev/null
 +++ b/kernel/src/user/shell.rs
-@@ -0,0 +1,461 @@
+@@ -0,0 +1,470 @@
 +use console::{kprint, kprintln, CONSOLE};
 +use std::path::{Path, PathBuf};
 +use pi::timer::{current_time, spin_sleep_ms};
@@ -1962,6 +1971,15 @@ index 0000000..3d9453b
 +        kprintln!("Slept for {} msec", time_elapsed);
 +    }
 +}
++
++pub fn timer() {
++    let (error, time_elapsed) = syscall::sleep(10 * 1000);
++    if error != 0 {
++        kprintln!("Failed with {}", error);
++    } else {
++        kprintln!("Slept for {} msec from thread 2", time_elapsed);
++    }
++}
 \ No newline at end of file
 diff --git a/kernel/src/user/syscall.rs b/kernel/src/user/syscall.rs
 new file mode 100644
@@ -2415,10 +2433,10 @@ index 0000000..0aa9c65
 \ No newline at end of file
 diff --git a/pi/src/timer/system_timer.rs b/pi/src/timer/system_timer.rs
 new file mode 100644
-index 0000000..195c060
+index 0000000..42f034c
 --- /dev/null
 +++ b/pi/src/timer/system_timer.rs
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,75 @@
 +use common::IO_BASE;
 +use volatile::prelude::*;
 +use volatile::{Volatile, ReadVolatile};
@@ -2464,15 +2482,6 @@ index 0000000..195c060
 +        let compare = current_low.wrapping_add(us);
 +        self.registers.COMPARE[1].write(compare); // timer 1
 +        self.registers.CS.or_mask(0b0010); // clear timer 1 interrupt
-+    }
-+
-+    // Match functions in generic_timer
-+    pub fn initialize() {
-+
-+    }
-+
-+    pub fn is_pending(&self) -> bool {
-+        false
 +    }
 +}
 +

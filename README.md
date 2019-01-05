@@ -24,6 +24,6 @@ To run kernel in QEMU, build kernel and then run it:
 ```
 cd os/kernel
 make QEMU=1
-qemu-system-aarch64 -machine raspi3 -serial null -serial mon:stdio -kernel build/kernel.bin
+qemu-system-aarch64 -machine raspi3 -serial null -serial mon:stdio -kernel build/kernel.bin -s -sd ../../2-fs/files/resources/mock1.fat32.img
 ```
 
