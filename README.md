@@ -6,8 +6,10 @@ My code for Stanford cs140e. Use `./gendiff.sh` to generate diff from subdirecto
 Using `alias code-rust="env RUST_TARGET_PATH=(pwd) RUST_LOG=rls=debug CARGO_INCREMENTAL=0 code-insiders"` in my fish config.
 
 ```
-rustup toolchain install nightly-2018-03-1
+rustup toolchain install nightly-2018-04-01
 rustup component add rustfmt-preview rls-preview rust-src rust-analysis
+# in cs140e directory
+rustup override set nightly-2018-04-01
 ```
 
 Build bootloader first, then
