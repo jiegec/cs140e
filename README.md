@@ -19,9 +19,11 @@ cd os/kernel
 make install; and screen /dev/tty.SLAB_USBtoUART 115200
 ```
 
-To run kernel in QEMU, first change to use generic_timer in os/kernel/pi/src/timer/mod.rs, then:
+To run kernel in QEMU, build kernel and then run it:
 
 ```
+cd os/kernel
+make QEMU=1
 qemu-system-aarch64 -machine raspi3 -serial null -serial mon:stdio -kernel build/kernel.bin
 ```
 

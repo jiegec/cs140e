@@ -135,11 +135,16 @@ index 0000000..a0df9dc
 +}
 \ No newline at end of file
 diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
-index eadd84a..4f6690b 100644
+index eadd84a..2dfd605 100644
 --- a/kernel/Cargo.toml
 +++ b/kernel/Cargo.toml
-@@ -9,7 +9,6 @@ path = "src/kmain.rs"
+@@ -7,9 +7,11 @@ authors = ["Sergio Benitez <sb@sergio.bz>"]
+ crate-type = ["staticlib"]
+ path = "src/kmain.rs"
  
++[features]
++qemu = ["pi/qemu"]
++
  [profile.dev]
  panic = "abort"
 -lto = true
@@ -147,10 +152,17 @@ index eadd84a..4f6690b 100644
  
  [profile.test]
 diff --git a/kernel/Makefile b/kernel/Makefile
-index 3572bad..be2aa78 100644
+index 3572bad..71ce800 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
-@@ -3,7 +3,7 @@ CROSS ?= $(TARGET)
+@@ -1,9 +1,14 @@
+ TARGET ?= aarch64-none-elf
+ CROSS ?= $(TARGET)
++ifeq ($(QEMU),1)
++	XARGO_FLAGS ?= --features=qemu
++else
++	XARGO_FLAGS ?= 
++endif
  
  CC := $(CROSS)-gcc
  TTYWRITE ?= ttywrite
@@ -159,7 +171,7 @@ index 3572bad..be2aa78 100644
  CCFLAGS ?= -Wall -O2 -nostdlib -nostartfiles -ffreestanding -pie -fpie
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
  XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
-@@ -18,7 +18,7 @@ RUST_RELEASE_LIB := $(RUST_BUILD_DIR)/release/lib$(RUST_BINARY).a
+@@ -18,7 +23,7 @@ RUST_RELEASE_LIB := $(RUST_BUILD_DIR)/release/lib$(RUST_BINARY).a
  
  RUST_LIB_DEPS = ../pi/src/* ../pi/src/*/** \
  				../../1-shell/stack-vec/src/* \
@@ -168,6 +180,20 @@ index 3572bad..be2aa78 100644
  
  RUST_DEPS = Xargo.toml Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
  EXT_DEPS = $(BUILD_DIR)/init.o
+@@ -44,11 +49,11 @@ install: $(KERNEL).bin
+ 
+ $(RUST_DEBUG_LIB): $(RUST_DEPS)
+ 	@echo "+ Building $@ [xargo]"
+-	@$(XARGO) build --target=$(TARGET)
++	@$(XARGO) build --target=$(TARGET) $(XARGO_FLAGS)
+ 
+ $(RUST_RELEASE_LIB): $(RUST_DEPS)
+ 	@echo "+ Building $@ [xargo --release]"
+-	@$(XARGO) build --release --target=$(TARGET)
++	@$(XARGO) build --release --target=$(TARGET) $(XARGO_FLAGS)
+ 
+ ifeq ($(DEBUG),1)
+ $(RUST_LIB): $(RUST_DEBUG_LIB) | $(BUILD_DIR)
 diff --git a/kernel/ext/init.S b/kernel/ext/init.S
 index 7941cd7..740a6e5 100644
 --- a/kernel/ext/init.S
@@ -841,7 +867,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..eb580dd 100644
+index e9522cd..a888900 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -852,7 +878,7 @@ index e9522cd..eb580dd 100644
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
  #![feature(i128_type)]
-@@ -14,15 +13,22 @@
+@@ -14,19 +13,22 @@
  #![feature(naked_functions)]
  #![feature(fn_must_use)]
  #![feature(alloc, allocator_api, global_allocator)]
@@ -867,16 +893,17 @@ index e9522cd..eb580dd 100644
 -extern crate fat32;
  
  pub mod allocator;
-+use pi::gpio::Gpio;
-+use std::fmt::Write;
-+use pi::uart::MiniUart;
 +use pi::timer::spin_sleep_ms;
-+use pi::timer::current_time;
 +
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -37,6 +43,7 @@ pub mod vm;
+-pub mod shell;
++pub mod user;
+ pub mod fs;
+ pub mod traps;
+ pub mod aarch64;
+@@ -37,6 +39,7 @@ pub mod vm;
  use allocator::Allocator;
  use fs::FileSystem;
  use process::GlobalScheduler;
@@ -884,7 +911,7 @@ index e9522cd..eb580dd 100644
  
  #[cfg(not(test))]
  #[global_allocator]
-@@ -50,4 +57,20 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +53,20 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -896,13 +923,13 @@ index e9522cd..eb580dd 100644
 +
 +pub extern "C" fn shell_thread() {
 +    loop {
-+        shell::shell("$ ");
++        user::shell("$ ");
 +    }
 +}
 +
 +pub extern "C" fn shell_thread_2() {
 +    loop {
-+        // shell::shell("# ");
++        // user::shell("# ");
 +    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
@@ -1195,13 +1222,286 @@ index 669b464..c99652b 100644
 +        }
      }
  }
-diff --git a/kernel/src/shell.rs b/kernel/src/shell.rs
-index a3ad171..d7d15ea 100644
---- a/kernel/src/shell.rs
-+++ b/kernel/src/shell.rs
-@@ -1,16 +1,46 @@
--use stack_vec::StackVec;
- use console::{kprint, kprintln, CONSOLE};
+diff --git a/kernel/src/traps/irq.rs b/kernel/src/traps/irq.rs
+index 3d92f03..e9ca6ea 100644
+--- a/kernel/src/traps/irq.rs
++++ b/kernel/src/traps/irq.rs
+@@ -1,7 +1,17 @@
+ use pi::interrupt::Interrupt;
+ 
+ use traps::TrapFrame;
++use process::State;
++use pi::timer::tick_in;
++use process::TICK;
++use SCHEDULER;
+ 
+ pub fn handle_irq(interrupt: Interrupt, tf: &mut TrapFrame) {
+-    unimplemented!("handle_irq()")
++    match interrupt {
++        Interrupt::Timer1 => {
++            tick_in(TICK);
++            SCHEDULER.switch(State::Ready, tf).unwrap();
++        }
++        _ => unimplemented!("handle_irq()"),
++    }
+ }
+diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
+index b66e46c..5e0faa5 100644
+--- a/kernel/src/traps/mod.rs
++++ b/kernel/src/traps/mod.rs
+@@ -11,6 +11,7 @@ use console::kprintln;
+ use self::syndrome::Syndrome;
+ use self::irq::handle_irq;
+ use self::syscall::handle_syscall;
++use user::shell as shell;
+ 
+ #[repr(u16)]
+ #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+@@ -42,6 +43,46 @@ pub struct Info {
+ /// the value of the exception syndrome register. Finally, `tf` is a pointer to
+ /// the trap frame for the exception.
+ #[no_mangle]
+-pub extern fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
+-    unimplemented!("handle_exception")
++pub extern "C" fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
++    let syndrome = Syndrome::from(esr);
++    if info.kind == Kind::Synchronous {
++        // syndrome is only valid with sync
++        match syndrome {
++            Syndrome::Brk(_) => {
++                kprintln!("Got {:?} from {:?}", syndrome, info.source);
++                shell(" [brk]$ ");
++
++                tf.elr += 4; // Skip the current brk instruction
++                return;
++            }
++            Syndrome::Svc(syscall) => {
++                handle_syscall(syscall, tf);
++                return;
++            }
++            _ => {}
++        }
++    } else if info.kind == Kind::Irq {
++        let controller = Controller::new();
++        use self::Interrupt::*;
++        for interrupt in [Timer1, Timer3, Usb, Gpio0, Gpio1, Gpio2, Gpio3, Uart].iter() {
++            if controller.is_pending(*interrupt) {
++                handle_irq(*interrupt, tf);
++                return;
++            }
++        }
++        use pi::timer::Timer;
++        if Timer::new().is_pending() {
++            handle_irq(Timer1, tf);
++            return;
++        }
++    }
++    kprintln!(
++        "Unhandled exception with info: {:?}, syndrome: {:?}, tf: {:?}",
++        info,
++        syndrome,
++        tf
++    );
++    loop {
++        unsafe { asm!("wfe") }
++    }
+ }
+diff --git a/kernel/src/traps/syndrome.rs b/kernel/src/traps/syndrome.rs
+index 7ab7337..9e5bb78 100644
+--- a/kernel/src/traps/syndrome.rs
++++ b/kernel/src/traps/syndrome.rs
+@@ -6,12 +6,23 @@ pub enum Fault {
+     Permission,
+     Alignment,
+     TlbConflict,
+-    Other(u8)
++    Other(u8),
+ }
+ 
+ impl From<u32> for Fault {
+     fn from(val: u32) -> Fault {
+-        unimplemented!("From<u32> for Fault")
++        use self::Fault::*;
++
++        // ifsc or dfsc bits
++        match val & 0b111100 {
++            0b000000 => AddressSize,
++            0b000100 => Translation,
++            0b001000 => AccessFlag,
++            0b001100 => Permission,
++            0b100000 => Alignment,
++            0b110000 => TlbConflict,
++            _ => Other((val & 0b111111) as u8),
++        }
+     }
+ }
+ 
+@@ -30,15 +41,9 @@ pub enum Syndrome {
+     Hvc(u16),
+     Smc(u16),
+     MsrMrsSystem,
+-    InstructionAbort {
+-        kind: Fault,
+-        level: u8,
+-    },
++    InstructionAbort { kind: Fault, level: u8 },
+     PCAlignmentFault,
+-    DataAbort {
+-        kind: Fault,
+-        level: u8
+-    },
++    DataAbort { kind: Fault, level: u8 },
+     SpAlignmentFault,
+     TrappedFpu,
+     SError,
+@@ -46,7 +51,7 @@ pub enum Syndrome {
+     Step,
+     Watchpoint,
+     Brk(u16),
+-    Other(u32)
++    Other(u32),
+ }
+ 
+ /// Converts a raw syndrome value (ESR) into a `Syndrome` (ref: D1.10.4).
+@@ -54,6 +59,57 @@ impl From<u32> for Syndrome {
+     fn from(esr: u32) -> Syndrome {
+         use self::Syndrome::*;
+ 
+-        unimplemented!("From<u32> for Syndrome")
++        let exception_class = esr >> 26;
++        let iss = esr & 0xFFFFFF;
++
++        match exception_class {
++            0b000000 => Unknown,
++            0b000001 => WfiWfe,
++            0b000011 => McrMrc,
++            0b000100 => McrrMrrc,
++            0b000101 => McrMrc,
++            0b000110 => LdcStc,
++            0b000111 => SimdFp,
++            0b001000 => Vmrs,
++            0b001100 => Mrrc,
++            0b001110 => IllegalExecutionState,
++            0b010001 => Svc((iss & 0xFFFF) as u16),
++            0b010010 => Hvc((iss & 0xFFFF) as u16),
++            0b010011 => Smc((iss & 0xFFFF) as u16),
++            0b010101 => Svc((iss & 0xFFFF) as u16),
++            0b010110 => Hvc((iss & 0xFFFF) as u16),
++            0b010111 => Smc((iss & 0xFFFF) as u16),
++            0b011000 => MsrMrsSystem,
++            0b100000 => InstructionAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100001 => InstructionAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100010 => PCAlignmentFault,
++            0b100100 => DataAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100101 => DataAbort {
++                kind: iss.into(),
++                level: (iss & 0b11) as u8,
++            },
++            0b100110 => SpAlignmentFault,
++            0b101000 => TrappedFpu,
++            0b101100 => TrappedFpu,
++            0b101111 => SError,
++            0b110000 => Breakpoint,
++            0b110001 => Breakpoint,
++            0b110010 => Step,
++            0b110011 => Step,
++            0b110100 => Watchpoint,
++            0b110101 => Watchpoint,
++            0b111000 => Breakpoint,
++            0b111100 => Brk((iss & 0xFFFF) as u16),
++            other => Other(other),
++        }
+     }
+ }
+diff --git a/kernel/src/traps/syscall.rs b/kernel/src/traps/syscall.rs
+index b6d0abc..066b7ad 100644
+--- a/kernel/src/traps/syscall.rs
++++ b/kernel/src/traps/syscall.rs
+@@ -1,4 +1,8 @@
+ use traps::TrapFrame;
++use pi::timer::current_time;
++use SCHEDULER;
++use process::State;
++use process::Process;
+ 
+ /// Sleep for `ms` milliseconds.
+ ///
+@@ -8,9 +12,28 @@ use traps::TrapFrame;
+ /// parameter: the approximate true elapsed time from when `sleep` was called to
+ /// when `sleep` returned.
+ pub fn sleep(ms: u32, tf: &mut TrapFrame) {
+-    unimplemented!("syscall: sleep()")
++    let begin = current_time();
++    let time = begin + ms as u64 * 1000;
++    let polling_fn = Box::new(move |process: &mut Process| {
++        let current = current_time();
++        if current > time {
++            process.trap_frame.x1to29[6] = 0; // x7 = 0; succeed
++            process.trap_frame.x0 = (current - begin) / 1000; // x0 = elapsed time in ms
++            true
++        } else {
++            false
++        }
++    });
++    SCHEDULER.switch(State::Waiting(polling_fn), tf).unwrap();
+ }
+ 
+ pub fn handle_syscall(num: u16, tf: &mut TrapFrame) {
+-    unimplemented!("handle_syscall()")
++    match num {
++        1 => {
++            sleep(tf.x0 as u32, tf);
++        }
++        _ => {
++            tf.x1to29[6] = 1; // x7 = 1, do not exist
++        }
++    }
+ }
+diff --git a/kernel/src/traps/trap_frame.rs b/kernel/src/traps/trap_frame.rs
+index b608d7d..4b35bd3 100644
+--- a/kernel/src/traps/trap_frame.rs
++++ b/kernel/src/traps/trap_frame.rs
+@@ -2,4 +2,13 @@
+ #[derive(Default, Debug, Copy, Clone)]
+ pub struct TrapFrame {
+     // FIXME: Fill me in.
++    pub elr: u64,
++    pub spsr: u64,
++    pub sp: u64,
++    pub tpidr: u64,
++    pub q0to31: [u128; 32],
++    pub x1to29: [u64; 29],
++    pub __r1: u64, // may be used to store lr temporaily
++    pub x30: u64,
++    pub x0: u64,
+ }
+diff --git a/kernel/src/user/mod.rs b/kernel/src/user/mod.rs
+new file mode 100644
+index 0000000..aba9b20
+--- /dev/null
++++ b/kernel/src/user/mod.rs
+@@ -0,0 +1,4 @@
++mod shell;
++mod syscall;
++
++pub use self::shell::shell;
+\ No newline at end of file
+diff --git a/kernel/src/user/shell.rs b/kernel/src/user/shell.rs
+new file mode 100644
+index 0000000..3d9453b
+--- /dev/null
++++ b/kernel/src/user/shell.rs
+@@ -0,0 +1,461 @@
++use console::{kprint, kprintln, CONSOLE};
 +use std::path::{Path, PathBuf};
 +use pi::timer::{current_time, spin_sleep_ms};
 +use pi::gpio::Gpio;
@@ -1212,15 +1512,14 @@ index a3ad171..d7d15ea 100644
 +use fat32::traits::{Dir, Entry, File, FileSystem, Metadata};
 +use std::io::Read;
 +use std::str;
-+use aarch64;
- 
- /// Error type for `Command` parse failures.
- #[derive(Debug)]
- enum Error {
-     Empty,
--    TooManyArgs
- }
- 
++use user::syscall;
++
++/// Error type for `Command` parse failures.
++#[derive(Debug)]
++enum Error {
++    Empty,
++}
++
 +const BEL: u8 = 0x07u8;
 +const BS: u8 = 0x08u8;
 +const LF: u8 = 0x0au8;
@@ -1242,40 +1541,41 @@ index a3ad171..d7d15ea 100644
 +            \ \
 +              \"#;
 +
- /// A structure representing a single shell command.
- struct Command<'a> {
--    args: StackVec<'a, &'a str>
++/// A structure representing a single shell command.
++struct Command<'a> {
 +    args: Vec<&'a str>,
- }
- 
- impl<'a> Command<'a> {
-@@ -21,10 +51,10 @@ impl<'a> Command<'a> {
-     ///
-     /// If `s` contains no arguments, returns `Error::Empty`. If there are more
-     /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
--    fn parse(s: &'a str, buf: &'a mut [&'a str]) -> Result<Command<'a>, Error> {
--        let mut args = StackVec::new(buf);
++}
++
++impl<'a> Command<'a> {
++    /// Parse a command from a string `s` using `buf` as storage for the
++    /// arguments.
++    ///
++    /// # Errors
++    ///
++    /// If `s` contains no arguments, returns `Error::Empty`. If there are more
++    /// arguments than `buf` can hold, returns `Error::TooManyArgs`.
 +    fn parse(s: &str) -> Result<Command, Error> {
 +        let mut args = Vec::with_capacity(64);
-         for arg in s.split(' ').filter(|a| !a.is_empty()) {
--            args.push(arg).map_err(|_| Error::TooManyArgs)?;
++        for arg in s.split(' ').filter(|a| !a.is_empty()) {
 +            args.push(arg);
-         }
- 
-         if args.is_empty() {
-@@ -36,12 +66,406 @@ impl<'a> Command<'a> {
- 
-     /// Returns this command's path. This is equivalent to the first argument.
-     fn path(&self) -> &str {
--        unimplemented!()
++        }
++
++        if args.is_empty() {
++            return Err(Error::Empty);
++        }
++
++        Ok(Command { args })
++    }
++
++    /// Returns this command's path. This is equivalent to the first argument.
++    fn path(&self) -> &str {
 +        self.args[0]
-     }
- }
- 
- /// Starts a shell using `prefix` as the prefix for each line. This function
- /// returns if the `exit` command is called.
- pub fn shell(prefix: &str) {
--    unimplemented!()
++    }
++}
++
++/// Starts a shell using `prefix` as the prefix for each line. This function
++/// returns if the `exit` command is called.
++pub fn shell(prefix: &str) {
 +    spin_sleep_ms(200); // wait a little time for client to attach
 +    kprintln!("{}", BANNER);
 +
@@ -1504,7 +1804,7 @@ index a3ad171..d7d15ea 100644
 +    for atag in Atags::get() {
 +        kprintln!("{:?}", atag);
 +    }
- }
++}
 +
 +fn memstat(_command: &Command) {
 +    #[cfg(not(test))]
@@ -1655,6 +1955,21 @@ index a3ad171..d7d15ea 100644
 +    } else {
 +        command.args[1].parse().unwrap_or(1000)
 +    };
++    let (error, time_elapsed) = syscall::sleep(time);
++    if error != 0 {
++        kprintln!("Failed with {}", error);
++    } else {
++        kprintln!("Slept for {} msec", time_elapsed);
++    }
++}
+\ No newline at end of file
+diff --git a/kernel/src/user/syscall.rs b/kernel/src/user/syscall.rs
+new file mode 100644
+index 0000000..56c01ae
+--- /dev/null
++++ b/kernel/src/user/syscall.rs
+@@ -0,0 +1,14 @@
++pub fn sleep(time: u64) -> (u64, u64) {
 +    let error: u64;
 +    let time_elapsed: u64;
 +    unsafe {
@@ -1665,271 +1980,20 @@ index a3ad171..d7d15ea 100644
 +              : "=r"(time_elapsed), "=r"(error)
 +              : "r"(time)
 +              : "x0", "x7")
-+    }
-+    if error != 0 {
-+        kprintln!("Failed with {}", error);
-+    } else {
-+        kprintln!("Slept for {} msec", time_elapsed);
-+    }
++    };
++    (error, time_elapsed)
 +}
 \ No newline at end of file
-diff --git a/kernel/src/traps/irq.rs b/kernel/src/traps/irq.rs
-index 3d92f03..e9ca6ea 100644
---- a/kernel/src/traps/irq.rs
-+++ b/kernel/src/traps/irq.rs
-@@ -1,7 +1,17 @@
- use pi::interrupt::Interrupt;
+diff --git a/pi/Cargo.toml b/pi/Cargo.toml
+index a2a5cbe..23b0d03 100644
+--- a/pi/Cargo.toml
++++ b/pi/Cargo.toml
+@@ -8,3 +8,4 @@ volatile = { path = "../volatile" }
  
- use traps::TrapFrame;
-+use process::State;
-+use pi::timer::tick_in;
-+use process::TICK;
-+use SCHEDULER;
- 
- pub fn handle_irq(interrupt: Interrupt, tf: &mut TrapFrame) {
--    unimplemented!("handle_irq()")
-+    match interrupt {
-+        Interrupt::Timer1 => {
-+            tick_in(TICK);
-+            SCHEDULER.switch(State::Ready, tf).unwrap();
-+        }
-+        _ => unimplemented!("handle_irq()"),
-+    }
- }
-diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..53c14df 100644
---- a/kernel/src/traps/mod.rs
-+++ b/kernel/src/traps/mod.rs
-@@ -11,6 +11,7 @@ use console::kprintln;
- use self::syndrome::Syndrome;
- use self::irq::handle_irq;
- use self::syscall::handle_syscall;
-+use shell;
- 
- #[repr(u16)]
- #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-@@ -42,6 +43,41 @@ pub struct Info {
- /// the value of the exception syndrome register. Finally, `tf` is a pointer to
- /// the trap frame for the exception.
- #[no_mangle]
--pub extern fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
--    unimplemented!("handle_exception")
-+pub extern "C" fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
-+    let syndrome = Syndrome::from(esr);
-+    if info.kind == Kind::Synchronous {
-+        // syndrome is only valid with sync
-+        match syndrome {
-+            Syndrome::Brk(_) => {
-+                kprintln!("Got {:?} from {:?}", syndrome, info.source);
-+                shell::shell(" [brk]$ ");
-+
-+                tf.elr += 4; // Skip the current brk instruction
-+                return;
-+            }
-+            Syndrome::Svc(syscall) => {
-+                handle_syscall(syscall, tf);
-+                return;
-+            }
-+            _ => {}
-+        }
-+    } else if info.kind == Kind::Irq {
-+        let controller = Controller::new();
-+        use self::Interrupt::*;
-+        for interrupt in [Timer1, Timer3, Usb, Gpio0, Gpio1, Gpio2, Gpio3, Uart].iter() {
-+            if controller.is_pending(*interrupt) {
-+                handle_irq(*interrupt, tf);
-+                return;
-+            }
-+        }
-+    }
-+    kprintln!(
-+        "Unhandled exception with info: {:?}, syndrome: {:?}, tf: {:?}",
-+        info,
-+        syndrome,
-+        tf
-+    );
-+    loop {
-+        unsafe { asm!("wfe") }
-+    }
- }
-diff --git a/kernel/src/traps/syndrome.rs b/kernel/src/traps/syndrome.rs
-index 7ab7337..9e5bb78 100644
---- a/kernel/src/traps/syndrome.rs
-+++ b/kernel/src/traps/syndrome.rs
-@@ -6,12 +6,23 @@ pub enum Fault {
-     Permission,
-     Alignment,
-     TlbConflict,
--    Other(u8)
-+    Other(u8),
- }
- 
- impl From<u32> for Fault {
-     fn from(val: u32) -> Fault {
--        unimplemented!("From<u32> for Fault")
-+        use self::Fault::*;
-+
-+        // ifsc or dfsc bits
-+        match val & 0b111100 {
-+            0b000000 => AddressSize,
-+            0b000100 => Translation,
-+            0b001000 => AccessFlag,
-+            0b001100 => Permission,
-+            0b100000 => Alignment,
-+            0b110000 => TlbConflict,
-+            _ => Other((val & 0b111111) as u8),
-+        }
-     }
- }
- 
-@@ -30,15 +41,9 @@ pub enum Syndrome {
-     Hvc(u16),
-     Smc(u16),
-     MsrMrsSystem,
--    InstructionAbort {
--        kind: Fault,
--        level: u8,
--    },
-+    InstructionAbort { kind: Fault, level: u8 },
-     PCAlignmentFault,
--    DataAbort {
--        kind: Fault,
--        level: u8
--    },
-+    DataAbort { kind: Fault, level: u8 },
-     SpAlignmentFault,
-     TrappedFpu,
-     SError,
-@@ -46,7 +51,7 @@ pub enum Syndrome {
-     Step,
-     Watchpoint,
-     Brk(u16),
--    Other(u32)
-+    Other(u32),
- }
- 
- /// Converts a raw syndrome value (ESR) into a `Syndrome` (ref: D1.10.4).
-@@ -54,6 +59,57 @@ impl From<u32> for Syndrome {
-     fn from(esr: u32) -> Syndrome {
-         use self::Syndrome::*;
- 
--        unimplemented!("From<u32> for Syndrome")
-+        let exception_class = esr >> 26;
-+        let iss = esr & 0xFFFFFF;
-+
-+        match exception_class {
-+            0b000000 => Unknown,
-+            0b000001 => WfiWfe,
-+            0b000011 => McrMrc,
-+            0b000100 => McrrMrrc,
-+            0b000101 => McrMrc,
-+            0b000110 => LdcStc,
-+            0b000111 => SimdFp,
-+            0b001000 => Vmrs,
-+            0b001100 => Mrrc,
-+            0b001110 => IllegalExecutionState,
-+            0b010001 => Svc((iss & 0xFFFF) as u16),
-+            0b010010 => Hvc((iss & 0xFFFF) as u16),
-+            0b010011 => Smc((iss & 0xFFFF) as u16),
-+            0b010101 => Svc((iss & 0xFFFF) as u16),
-+            0b010110 => Hvc((iss & 0xFFFF) as u16),
-+            0b010111 => Smc((iss & 0xFFFF) as u16),
-+            0b011000 => MsrMrsSystem,
-+            0b100000 => InstructionAbort {
-+                kind: iss.into(),
-+                level: (iss & 0b11) as u8,
-+            },
-+            0b100001 => InstructionAbort {
-+                kind: iss.into(),
-+                level: (iss & 0b11) as u8,
-+            },
-+            0b100010 => PCAlignmentFault,
-+            0b100100 => DataAbort {
-+                kind: iss.into(),
-+                level: (iss & 0b11) as u8,
-+            },
-+            0b100101 => DataAbort {
-+                kind: iss.into(),
-+                level: (iss & 0b11) as u8,
-+            },
-+            0b100110 => SpAlignmentFault,
-+            0b101000 => TrappedFpu,
-+            0b101100 => TrappedFpu,
-+            0b101111 => SError,
-+            0b110000 => Breakpoint,
-+            0b110001 => Breakpoint,
-+            0b110010 => Step,
-+            0b110011 => Step,
-+            0b110100 => Watchpoint,
-+            0b110101 => Watchpoint,
-+            0b111000 => Breakpoint,
-+            0b111100 => Brk((iss & 0xFFFF) as u16),
-+            other => Other(other),
-+        }
-     }
- }
-diff --git a/kernel/src/traps/syscall.rs b/kernel/src/traps/syscall.rs
-index b6d0abc..066b7ad 100644
---- a/kernel/src/traps/syscall.rs
-+++ b/kernel/src/traps/syscall.rs
-@@ -1,4 +1,8 @@
- use traps::TrapFrame;
-+use pi::timer::current_time;
-+use SCHEDULER;
-+use process::State;
-+use process::Process;
- 
- /// Sleep for `ms` milliseconds.
- ///
-@@ -8,9 +12,28 @@ use traps::TrapFrame;
- /// parameter: the approximate true elapsed time from when `sleep` was called to
- /// when `sleep` returned.
- pub fn sleep(ms: u32, tf: &mut TrapFrame) {
--    unimplemented!("syscall: sleep()")
-+    let begin = current_time();
-+    let time = begin + ms as u64 * 1000;
-+    let polling_fn = Box::new(move |process: &mut Process| {
-+        let current = current_time();
-+        if current > time {
-+            process.trap_frame.x1to29[6] = 0; // x7 = 0; succeed
-+            process.trap_frame.x0 = (current - begin) / 1000; // x0 = elapsed time in ms
-+            true
-+        } else {
-+            false
-+        }
-+    });
-+    SCHEDULER.switch(State::Waiting(polling_fn), tf).unwrap();
- }
- 
- pub fn handle_syscall(num: u16, tf: &mut TrapFrame) {
--    unimplemented!("handle_syscall()")
-+    match num {
-+        1 => {
-+            sleep(tf.x0 as u32, tf);
-+        }
-+        _ => {
-+            tf.x1to29[6] = 1; // x7 = 1, do not exist
-+        }
-+    }
- }
-diff --git a/kernel/src/traps/trap_frame.rs b/kernel/src/traps/trap_frame.rs
-index b608d7d..4b35bd3 100644
---- a/kernel/src/traps/trap_frame.rs
-+++ b/kernel/src/traps/trap_frame.rs
-@@ -2,4 +2,13 @@
- #[derive(Default, Debug, Copy, Clone)]
- pub struct TrapFrame {
-     // FIXME: Fill me in.
-+    pub elr: u64,
-+    pub spsr: u64,
-+    pub sp: u64,
-+    pub tpidr: u64,
-+    pub q0to31: [u128; 32],
-+    pub x1to29: [u64; 29],
-+    pub __r1: u64, // may be used to store lr temporaily
-+    pub x30: u64,
-+    pub x0: u64,
- }
+ [features]
+ std = []
++qemu = []
+\ No newline at end of file
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
 --- a/pi/src/atags/atag.rs
@@ -2181,12 +2245,12 @@ index 27b295e..3d1e81a 100644
  #![feature(pointer_methods)]
 diff --git a/pi/src/timer/generic_timer.rs b/pi/src/timer/generic_timer.rs
 new file mode 100644
-index 0000000..8a00adf
+index 0000000..5193c25
 --- /dev/null
 +++ b/pi/src/timer/generic_timer.rs
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,148 @@
 +use volatile::prelude::*;
-+use volatile::{Volatile, ReadVolatile};
++use volatile::Volatile;
 +
 +/// The base address for the ARM generic timer registers.
 +const GEN_TIMER_REG_BASE: usize = 0x40000000;
@@ -2243,6 +2307,12 @@ index 0000000..8a00adf
 +    }
 +}
 +
++pub fn set_cntp_tval_el0(x: u64) {
++    unsafe {
++        asm!("msr cntp_tval_el0, $0" :: "r"(x));
++    }
++}
++
 +pub fn get_cntfrq_el0() -> u64 {
 +    let x: u64;
 +    unsafe {
@@ -2283,7 +2353,7 @@ index 0000000..8a00adf
 +    /// interrupt will be issued in `us` microseconds.
 +    pub fn tick_in(&mut self, us: u32) {
 +        let cntfrq = get_cntfrq_el0(); // 62500000
-+        //CNTP_TVAL_EL0.set(((cntfrq as f64) * (us as f64) / 1000000.0) as u32);
++        set_cntp_tval_el0(((cntfrq as f64) * (us as f64) / 1000000.0) as u64);
 +    }
 +
 +    pub fn initialize() {
@@ -2291,8 +2361,12 @@ index 0000000..8a00adf
 +            registers: unsafe { &mut *(GEN_TIMER_REG_BASE as *mut Registers) },
 +        };
 +        timer.registers.CORE_TIMER_IRQCNTL[0].write(1 << (CoreInterrupt::CNTPNSIRQ as u8));
-+        set_cntp_ctl_el0(0x3); // enable timer interrupt and mask it
++        set_cntp_ctl_el0(0x1); // enable timer interrupt and do not mask it
 +        set_cntk_ctl_el1(0x3); // allow EL0 to read timer counter
++    }
++
++    pub fn is_pending(&self) -> bool {
++        self.registers.CORE_IRQ_SRC[0].read() & (1 << (CoreInterrupt::CNTPNSIRQ as u8)) != 0
 +    }
 +}
 +
@@ -2325,21 +2399,26 @@ index 0000000..8a00adf
 +}
 diff --git a/pi/src/timer/mod.rs b/pi/src/timer/mod.rs
 new file mode 100644
-index 0000000..96d9c8d
+index 0000000..0aa9c65
 --- /dev/null
 +++ b/pi/src/timer/mod.rs
-@@ -0,0 +1,4 @@
-+mod system_timer;
+@@ -0,0 +1,9 @@
++#[cfg(feature = "qemu")]
 +mod generic_timer;
-+//pub use self::system_timer::*;
++#[cfg(not(feature = "qemu"))]
++mod system_timer;
++
++#[cfg(feature = "qemu")]
 +pub use self::generic_timer::*;
++#[cfg(not(feature = "qemu"))]
++pub use self::system_timer::*;
 \ No newline at end of file
 diff --git a/pi/src/timer/system_timer.rs b/pi/src/timer/system_timer.rs
 new file mode 100644
-index 0000000..977a72a
+index 0000000..195c060
 --- /dev/null
 +++ b/pi/src/timer/system_timer.rs
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,84 @@
 +use common::IO_BASE;
 +use volatile::prelude::*;
 +use volatile::{Volatile, ReadVolatile};
@@ -2387,8 +2466,13 @@ index 0000000..977a72a
 +        self.registers.CS.or_mask(0b0010); // clear timer 1 interrupt
 +    }
 +
++    // Match functions in generic_timer
 +    pub fn initialize() {
 +
++    }
++
++    pub fn is_pending(&self) -> bool {
++        false
 +    }
 +}
 +
