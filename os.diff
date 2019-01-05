@@ -867,7 +867,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..ffd405c 100644
+index e9522cd..33caad2 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -878,11 +878,12 @@ index e9522cd..ffd405c 100644
  #![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
  #![feature(i128_type)]
-@@ -14,19 +13,22 @@
+@@ -14,19 +13,23 @@
  #![feature(naked_functions)]
  #![feature(fn_must_use)]
  #![feature(alloc, allocator_api, global_allocator)]
 +#![feature(ptr_internals)]
++#![feature(alloc_system)]
  
  #[macro_use]
  #[allow(unused_imports)]
@@ -903,7 +904,7 @@ index e9522cd..ffd405c 100644
  pub mod fs;
  pub mod traps;
  pub mod aarch64;
-@@ -37,6 +39,8 @@ pub mod vm;
+@@ -37,11 +40,21 @@ pub mod vm;
  use allocator::Allocator;
  use fs::FileSystem;
  use process::GlobalScheduler;
@@ -912,7 +913,20 @@ index e9522cd..ffd405c 100644
  
  #[cfg(not(test))]
  #[global_allocator]
-@@ -50,4 +54,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+ pub static ALLOCATOR: Allocator = Allocator::uninitialized();
+ 
++#[cfg(test)]
++extern crate alloc_system;
++#[cfg(test)]
++use alloc_system::System;
++#[cfg(test)]
++#[global_allocator]
++pub static ALLOCATOR: System = System;
++
+ pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
+ 
+ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +63,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -1078,7 +1092,7 @@ index 3bf9b70..b7f69a9 100644
      }
  }
 diff --git a/kernel/src/process/scheduler.rs b/kernel/src/process/scheduler.rs
-index 669b464..c99652b 100644
+index 669b464..26d951f 100644
 --- a/kernel/src/process/scheduler.rs
 +++ b/kernel/src/process/scheduler.rs
 @@ -1,12 +1,17 @@
@@ -1114,7 +1128,7 @@ index 669b464..c99652b 100644
      }
  
      /// Performs a context switch using `tf` by setting the state of the current
-@@ -30,14 +39,42 @@ impl GlobalScheduler {
+@@ -30,14 +39,43 @@ impl GlobalScheduler {
      /// the documentation on `Scheduler::switch()`.
      #[must_use]
      pub fn switch(&self, new_state: State, tf: &mut TrapFrame) -> Option<Id> {
@@ -1148,6 +1162,7 @@ index 669b464..c99652b 100644
 +        scheduler.add(process2).unwrap();
 +
 +        *self.0.lock() = Some(scheduler);
++        #[cfg(not(test))]
 +        unsafe {
 +            asm!("mov sp, $0
 +              bl context_restore
@@ -1159,7 +1174,7 @@ index 669b464..c99652b 100644
      }
  }
  
-@@ -51,7 +88,11 @@ struct Scheduler {
+@@ -51,7 +89,11 @@ struct Scheduler {
  impl Scheduler {
      /// Returns a new `Scheduler` with an empty queue.
      fn new() -> Scheduler {
@@ -1172,7 +1187,7 @@ index 669b464..c99652b 100644
      }
  
      /// Adds a process to the scheduler's queue and returns that process's ID if
-@@ -63,7 +104,18 @@ impl Scheduler {
+@@ -63,7 +105,18 @@ impl Scheduler {
      /// It is the caller's responsibility to ensure that the first time `switch`
      /// is called, that process is executing on the CPU.
      fn add(&mut self, mut process: Process) -> Option<Id> {
@@ -1192,7 +1207,7 @@ index 669b464..c99652b 100644
      }
  
      /// Sets the current process's state to `new_state`, finds the next process
-@@ -75,6 +127,30 @@ impl Scheduler {
+@@ -75,6 +128,31 @@ impl Scheduler {
      /// This method blocks until there is a process to switch to, conserving
      /// energy as much as possible in the interim.
      fn switch(&mut self, new_state: State, tf: &mut TrapFrame) -> Option<Id> {
@@ -1220,6 +1235,7 @@ index 669b464..c99652b 100644
 +                    self.processes.push_back(new_process);
 +                }
 +            }
++            #[cfg(not(test))]
 +            unsafe { asm!("wfi") }
 +        }
      }
@@ -1248,7 +1264,7 @@ index 3d92f03..e9ca6ea 100644
 +    }
  }
 diff --git a/kernel/src/traps/mod.rs b/kernel/src/traps/mod.rs
-index b66e46c..d4afd3a 100644
+index b66e46c..7d6be26 100644
 --- a/kernel/src/traps/mod.rs
 +++ b/kernel/src/traps/mod.rs
 @@ -11,6 +11,10 @@ use console::kprintln;
@@ -1262,7 +1278,7 @@ index b66e46c..d4afd3a 100644
  
  #[repr(u16)]
  #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-@@ -42,6 +46,49 @@ pub struct Info {
+@@ -42,6 +46,50 @@ pub struct Info {
  /// the value of the exception syndrome register. Finally, `tf` is a pointer to
  /// the trap frame for the exception.
  #[no_mangle]
@@ -1311,6 +1327,7 @@ index b66e46c..d4afd3a 100644
 +        tf
 +    );
 +    loop {
++        #[cfg(not(test))]
 +        unsafe { asm!("wfe") }
 +    }
  }
@@ -1506,10 +1523,10 @@ index 0000000..583e993
 \ No newline at end of file
 diff --git a/kernel/src/user/shell.rs b/kernel/src/user/shell.rs
 new file mode 100644
-index 0000000..226017d
+index 0000000..820ea5f
 --- /dev/null
 +++ b/kernel/src/user/shell.rs
-@@ -0,0 +1,470 @@
+@@ -0,0 +1,471 @@
 +use console::{kprint, kprintln, CONSOLE};
 +use std::path::{Path, PathBuf};
 +use pi::timer::{current_time, spin_sleep_ms};
@@ -1946,6 +1963,7 @@ index 0000000..226017d
 +
 +fn brk() {
 +    unsafe {
++        #[cfg(not(test))]
 +        asm!("brk 2" :::: "volatile");
 +    }
 +}
@@ -1983,13 +2001,14 @@ index 0000000..226017d
 \ No newline at end of file
 diff --git a/kernel/src/user/syscall.rs b/kernel/src/user/syscall.rs
 new file mode 100644
-index 0000000..56c01ae
+index 0000000..167fb91
 --- /dev/null
 +++ b/kernel/src/user/syscall.rs
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,15 @@
 +pub fn sleep(time: u64) -> (u64, u64) {
-+    let error: u64;
-+    let time_elapsed: u64;
++    let error: u64 = 0;
++    let time_elapsed: u64 = 0;
++    #[cfg(not(test))]
 +    unsafe {
 +        asm!("mov x0, $2
 +              svc 1
