@@ -2001,13 +2001,13 @@ index 0000000..820ea5f
 \ No newline at end of file
 diff --git a/kernel/src/user/syscall.rs b/kernel/src/user/syscall.rs
 new file mode 100644
-index 0000000..167fb91
+index 0000000..a67362e
 --- /dev/null
 +++ b/kernel/src/user/syscall.rs
 @@ -0,0 +1,15 @@
 +pub fn sleep(time: u64) -> (u64, u64) {
-+    let error: u64 = 0;
-+    let time_elapsed: u64 = 0;
++    let mut error: u64 = 0;
++    let mut time_elapsed: u64 = 0;
 +    #[cfg(not(test))]
 +    unsafe {
 +        asm!("mov x0, $2
