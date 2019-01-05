@@ -16,8 +16,9 @@ index 26282d6..a44adf3 100644
 +  }
  }
 diff --git a/phase4/.vscode/settings.json b/phase4/.vscode/settings.json
-index e69de29..2dd73f2 100644
---- a/phase4/.vscode/settings.json
+new file mode 100644
+index 0000000..2dd73f2
+--- /dev/null
 +++ b/phase4/.vscode/settings.json
 @@ -0,0 +1,4 @@
 +{

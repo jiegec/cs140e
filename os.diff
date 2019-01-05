@@ -1,11 +1,12 @@
 diff --git a/bootloader/.vscode/settings.json b/bootloader/.vscode/settings.json
-index e69de29..2dd73f2 100644
---- a/bootloader/.vscode/settings.json
+new file mode 100644
+index 0000000..a0df9dc
+--- /dev/null
 +++ b/bootloader/.vscode/settings.json
 @@ -0,0 +1,4 @@
 +{
 +    "rust.target": "aarch64-none-elf",
-+    "rust.sysroot": "/Users/macbookair/.xargo"
++    "rust.sysroot": "/Users/macbookpro/.xargo"
 +}
 \ No newline at end of file
 diff --git a/bootloader/Xargo.toml b/bootloader/Xargo.toml
@@ -21,15 +22,17 @@ index 5e8c094..3fb0b62 100644
  [dependencies.compiler_builtins]
  features = ["mem"]
 diff --git a/bootloader/src/allocator b/bootloader/src/allocator
-index e69de29..eb56ef6 120000
---- a/bootloader/src/allocator
+new file mode 120000
+index 0000000..eb56ef6
+--- /dev/null
 +++ b/bootloader/src/allocator
 @@ -0,0 +1 @@
 +../../kernel/src/allocator
 \ No newline at end of file
 diff --git a/bootloader/src/console.rs b/bootloader/src/console.rs
-index e69de29..9bf5d6e 120000
---- a/bootloader/src/console.rs
+new file mode 120000
+index 0000000..9bf5d6e
+--- /dev/null
 +++ b/bootloader/src/console.rs
 @@ -0,0 +1 @@
 +../../kernel/src/console.rs
@@ -105,20 +108,30 @@ index 591a219..a3cbd2b 100644
 +    }
  }
 diff --git a/bootloader/src/mutex.rs b/bootloader/src/mutex.rs
-index e69de29..a29af40 120000
---- a/bootloader/src/mutex.rs
+new file mode 120000
+index 0000000..a29af40
+--- /dev/null
 +++ b/bootloader/src/mutex.rs
 @@ -0,0 +1 @@
 +../../kernel/src/mutex.rs
 \ No newline at end of file
+diff --git a/kernel/.gdbinit b/kernel/.gdbinit
+new file mode 100644
+index 0000000..f3e6ccc
+--- /dev/null
++++ b/kernel/.gdbinit
+@@ -0,0 +1,2 @@
++file build/kernel.elf
++target remote localhost:1234
 diff --git a/kernel/.vscode/settings.json b/kernel/.vscode/settings.json
-index e69de29..2dd73f2 100644
---- a/kernel/.vscode/settings.json
+new file mode 100644
+index 0000000..a0df9dc
+--- /dev/null
 +++ b/kernel/.vscode/settings.json
 @@ -0,0 +1,4 @@
 +{
 +    "rust.target": "aarch64-none-elf",
-+    "rust.sysroot": "/Users/macbookair/.xargo"
++    "rust.sysroot": "/Users/macbookpro/.xargo"
 +}
 \ No newline at end of file
 diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
@@ -828,7 +841,7 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..db26f88 100644
+index e9522cd..eb580dd 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
 @@ -4,7 +4,6 @@
@@ -863,11 +876,20 @@ index e9522cd..db26f88 100644
  pub mod lang_items;
  pub mod mutex;
  pub mod console;
-@@ -50,4 +56,19 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -37,6 +43,7 @@ pub mod vm;
+ use allocator::Allocator;
+ use fs::FileSystem;
+ use process::GlobalScheduler;
++use pi::timer::Timer;
+ 
+ #[cfg(not(test))]
+ #[global_allocator]
+@@ -50,4 +57,20 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
-+    FILE_SYSTEM.initialize();
++    Timer::initialize();
++    //FILE_SYSTEM.initialize();
 +    spin_sleep_ms(200);
 +    SCHEDULER.start();
 +}
@@ -2157,41 +2179,130 @@ index 27b295e..3d1e81a 100644
  #![feature(attr_literals)]
  #![feature(never_type)]
  #![feature(pointer_methods)]
-diff --git a/pi/src/timer.rs b/pi/src/timer.rs
-index 0086c0b..42f034c 100644
---- a/pi/src/timer.rs
-+++ b/pi/src/timer.rs
-@@ -30,35 +30,46 @@ impl Timer {
-     /// Reads the system timer's counter and returns the 64-bit counter value.
-     /// The returned value is the number of elapsed microseconds.
-     pub fn read(&self) -> u64 {
--        unimplemented!()
-+        let low = self.registers.CLO.read();
-+        let high = self.registers.CHI.read();
-+        ((high as u64) << 32) | (low as u64)
-     }
- 
-     /// Sets up a match in timer 1 to occur `us` microseconds from now. If
-     /// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
-     /// interrupt will be issued in `us` microseconds.
-     pub fn tick_in(&mut self, us: u32) {
--        unimplemented!()
-+        let current_low = self.registers.CLO.read();
-+        let compare = current_low.wrapping_add(us);
-+        self.registers.COMPARE[1].write(compare); // timer 1
-+        self.registers.CS.or_mask(0b0010); // clear timer 1 interrupt
-     }
- }
- 
- /// Returns the current time in microseconds.
- pub fn current_time() -> u64 {
--    unimplemented!()
+diff --git a/pi/src/timer/generic_timer.rs b/pi/src/timer/generic_timer.rs
+new file mode 100644
+index 0000000..8a00adf
+--- /dev/null
++++ b/pi/src/timer/generic_timer.rs
+@@ -0,0 +1,138 @@
++use volatile::prelude::*;
++use volatile::{Volatile, ReadVolatile};
++
++/// The base address for the ARM generic timer registers.
++const GEN_TIMER_REG_BASE: usize = 0x40000000;
++
++/// Core interrupt sources (ref: QA7 4.10, page 16)
++#[repr(u8)]
++#[allow(dead_code)]
++#[allow(non_snake_case)]
++#[derive(Copy, Clone, PartialEq, Debug)]
++enum CoreInterrupt {
++    CNTPSIRQ = 0,
++    CNTPNSIRQ = 1,
++    CNTHPIRQ = 2,
++    CNTVIRQ = 3,
++    Mailbox0 = 4,
++    Mailbox1 = 5,
++    Mailbox2 = 6,
++    Mailbox3 = 7,
++    Gpu = 8,
++    Pmu = 9,
++    AxiOutstanding = 10,
++    LocalTimer = 11,
++}
++
++#[repr(C)]
++#[allow(non_snake_case)]
++struct Registers {
++    CONTROL: Volatile<u32>,
++    _unused1: [Volatile<u32>; 8],
++    LOCAL_IRQ: Volatile<u32>,
++    _unused2: [Volatile<u32>; 3],
++    LOCAL_TIMER_CTL: Volatile<u32>,
++    LOCAL_TIMER_FLAGS: Volatile<u32>,
++    _unused3: [Volatile<u32>; 1],
++    CORE_TIMER_IRQCNTL: [Volatile<u32>; 4],
++    CORE_MAILBOX_IRQCNTL: [Volatile<u32>; 4],
++    CORE_IRQ_SRC: [Volatile<u32>; 4],
++}
++
++/// The ARM generic timer.
++pub struct Timer {
++    registers: &'static mut Registers
++}
++
++pub fn set_cntp_ctl_el0(x: u64) {
++    unsafe {
++        asm!("msr cntp_ctl_el0, $0" :: "r"(x));
++    }
++}
++
++pub fn set_cntk_ctl_el1(x: u64) {
++    unsafe {
++        asm!("msr cntkctl_el1, $0" :: "r"(x));
++    }
++}
++
++pub fn get_cntfrq_el0() -> u64 {
++    let x: u64;
++    unsafe {
++        asm!("mrs $0, cntfrq_el0"
++            : "=r"(x));
++    }
++    x
++}
++
++pub fn get_cntpct_el0() -> u64 {
++    let x: u64;
++    unsafe {
++        asm!("isb
++              mrs $0, cntpct_el0"
++            : "=r"(x) : : : "volatile");
++    }
++    x
++}
++
++
++impl Timer {
++    /// Returns a new instance of `Timer`.
++    pub fn new() -> Timer {
++        Timer {
++            registers: unsafe { &mut *(GEN_TIMER_REG_BASE as *mut Registers) },
++        }
++    }
++
++    /// Reads the system timer's counter and returns the 64-bit counter value.
++    /// The returned value is the number of elapsed microseconds.
++    pub fn read(&self) -> u64 {
++        let cntfrq = get_cntfrq_el0(); // 62500000
++        (get_cntpct_el0() * 1000000 / (cntfrq as u64)) as u64
++    }
++
++    /// Sets up a match in timer 1 to occur `us` microseconds from now. If
++    /// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
++    /// interrupt will be issued in `us` microseconds.
++    pub fn tick_in(&mut self, us: u32) {
++        let cntfrq = get_cntfrq_el0(); // 62500000
++        //CNTP_TVAL_EL0.set(((cntfrq as f64) * (us as f64) / 1000000.0) as u32);
++    }
++
++    pub fn initialize() {
++        let timer = Timer {
++            registers: unsafe { &mut *(GEN_TIMER_REG_BASE as *mut Registers) },
++        };
++        timer.registers.CORE_TIMER_IRQCNTL[0].write(1 << (CoreInterrupt::CNTPNSIRQ as u8));
++        set_cntp_ctl_el0(0x3); // enable timer interrupt and mask it
++        set_cntk_ctl_el1(0x3); // allow EL0 to read timer counter
++    }
++}
++
++/// Returns the current time in microseconds.
++pub fn current_time() -> u64 {
 +    Timer::new().read()
- }
- 
- /// Spins until `us` microseconds have passed.
- pub fn spin_sleep_us(us: u64) {
--    unimplemented!()
++}
++
++/// Spins until `us` microseconds have passed.
++pub fn spin_sleep_us(us: u64) {
 +    let old = current_time();
 +    loop {
 +        let new = current_time();
@@ -2199,21 +2310,115 @@ index 0086c0b..42f034c 100644
 +            break;
 +        }
 +    }
- }
- 
- /// Spins until `ms` milliseconds have passed.
- pub fn spin_sleep_ms(ms: u64) {
--    unimplemented!()
++}
++
++/// Spins until `ms` milliseconds have passed.
++pub fn spin_sleep_ms(ms: u64) {
 +    spin_sleep_us(ms * 1000);
- }
- 
- /// Sets up a match in timer 1 to occur `us` microseconds from now. If
- /// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
- /// interrupt will be issued in `us` microseconds.
- pub fn tick_in(us: u32) {
--    unimplemented!()
++}
++
++/// Sets up a match in timer 1 to occur `us` microseconds from now. If
++/// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
++/// interrupt will be issued in `us` microseconds.
++pub fn tick_in(us: u32) {
 +    Timer::new().tick_in(us)
- }
++}
+diff --git a/pi/src/timer/mod.rs b/pi/src/timer/mod.rs
+new file mode 100644
+index 0000000..96d9c8d
+--- /dev/null
++++ b/pi/src/timer/mod.rs
+@@ -0,0 +1,4 @@
++mod system_timer;
++mod generic_timer;
++//pub use self::system_timer::*;
++pub use self::generic_timer::*;
+\ No newline at end of file
+diff --git a/pi/src/timer/system_timer.rs b/pi/src/timer/system_timer.rs
+new file mode 100644
+index 0000000..977a72a
+--- /dev/null
++++ b/pi/src/timer/system_timer.rs
+@@ -0,0 +1,79 @@
++use common::IO_BASE;
++use volatile::prelude::*;
++use volatile::{Volatile, ReadVolatile};
++
++/// The base address for the ARM system timer registers.
++const TIMER_REG_BASE: usize = IO_BASE + 0x3000;
++
++#[repr(C)]
++#[allow(non_snake_case)]
++struct Registers {
++    CS: Volatile<u32>,
++    CLO: ReadVolatile<u32>,
++    CHI: ReadVolatile<u32>,
++    COMPARE: [Volatile<u32>; 4]
++}
++
++/// The Raspberry Pi ARM system timer.
++pub struct Timer {
++    registers: &'static mut Registers
++}
++
++impl Timer {
++    /// Returns a new instance of `Timer`.
++    pub fn new() -> Timer {
++        Timer {
++            registers: unsafe { &mut *(TIMER_REG_BASE as *mut Registers) },
++        }
++    }
++
++    /// Reads the system timer's counter and returns the 64-bit counter value.
++    /// The returned value is the number of elapsed microseconds.
++    pub fn read(&self) -> u64 {
++        let low = self.registers.CLO.read();
++        let high = self.registers.CHI.read();
++        ((high as u64) << 32) | (low as u64)
++    }
++
++    /// Sets up a match in timer 1 to occur `us` microseconds from now. If
++    /// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
++    /// interrupt will be issued in `us` microseconds.
++    pub fn tick_in(&mut self, us: u32) {
++        let current_low = self.registers.CLO.read();
++        let compare = current_low.wrapping_add(us);
++        self.registers.COMPARE[1].write(compare); // timer 1
++        self.registers.CS.or_mask(0b0010); // clear timer 1 interrupt
++    }
++
++    pub fn initialize() {
++
++    }
++}
++
++/// Returns the current time in microseconds.
++pub fn current_time() -> u64 {
++    Timer::new().read()
++}
++
++/// Spins until `us` microseconds have passed.
++pub fn spin_sleep_us(us: u64) {
++    let old = current_time();
++    loop {
++        let new = current_time();
++        if old + us <= new {
++            break;
++        }
++    }
++}
++
++/// Spins until `ms` milliseconds have passed.
++pub fn spin_sleep_ms(ms: u64) {
++    spin_sleep_us(ms * 1000);
++}
++
++/// Sets up a match in timer 1 to occur `us` microseconds from now. If
++/// interrupts for timer 1 are enabled and IRQs are unmasked, then a timer
++/// interrupt will be issued in `us` microseconds.
++pub fn tick_in(us: u32) {
++    Timer::new().tick_in(us)
++}
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
 index 92b6159..91ca7a3 100644
 --- a/pi/src/uart.rs

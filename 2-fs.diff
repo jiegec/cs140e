@@ -1109,8 +1109,9 @@ index 82527ae..d7951be 100644
 +#[cfg(test)]
 +mod tests;
 diff --git a/fat32/src/vfat/tests.rs b/fat32/src/vfat/tests.rs
-index e69de29..ba13ef6 100644
---- a/fat32/src/vfat/tests.rs
+new file mode 100644
+index 0000000..ba13ef6
+--- /dev/null
 +++ b/fat32/src/vfat/tests.rs
 @@ -0,0 +1,78 @@
 +use std::fs;
