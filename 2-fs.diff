@@ -1,3 +1,17 @@
+diff --git a/fat32/Cargo.toml b/fat32/Cargo.toml
+index 725fe5a..c4053c0 100644
+--- a/fat32/Cargo.toml
++++ b/fat32/Cargo.toml
+@@ -4,6 +4,7 @@ version = "0.1.0"
+ authors = ["Sergio Benitez <sb@sergio.bz>"]
+ 
+ [dependencies]
++std = { path = "../../os/std" }
+ 
+ [dev-dependencies]
+-rand = "0.4"
++rand = "0.4"
+\ No newline at end of file
 diff --git a/fat32/src/mbr.rs b/fat32/src/mbr.rs
 index d200c10..3742e38 100644
 --- a/fat32/src/mbr.rs

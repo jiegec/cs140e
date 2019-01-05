@@ -135,10 +135,16 @@ index 0000000..a0df9dc
 +}
 \ No newline at end of file
 diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
-index eadd84a..2dfd605 100644
+index eadd84a..d3f6283 100644
 --- a/kernel/Cargo.toml
 +++ b/kernel/Cargo.toml
-@@ -7,9 +7,11 @@ authors = ["Sergio Benitez <sb@sergio.bz>"]
+@@ -2,14 +2,17 @@
+ name = "kernel"
+ version = "0.1.0"
+ authors = ["Sergio Benitez <sb@sergio.bz>"]
++links = "sd"
+ 
+ [lib]
  crate-type = ["staticlib"]
  path = "src/kmain.rs"
  
@@ -151,17 +157,32 @@ index eadd84a..2dfd605 100644
  debug = true
  
  [profile.test]
+@@ -21,10 +24,12 @@ panic = "abort"
+ lto = true
+ 
+ [dependencies]
+-pi = { path = "../pi", features = ["std"] }
++pi = { path = "../pi" }
+ 
+ # from assignment 1
+ stack-vec = { path = "../../1-shell/stack-vec/" }
+ 
+ # from assignment 2
+ fat32 = { path = "../../2-fs/fat32/" }
++
++std = { path = "../std" }
+\ No newline at end of file
 diff --git a/kernel/Makefile b/kernel/Makefile
-index 3572bad..71ce800 100644
+index 3572bad..5ba1a22 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
-@@ -1,9 +1,14 @@
+@@ -1,12 +1,17 @@
  TARGET ?= aarch64-none-elf
  CROSS ?= $(TARGET)
 +ifeq ($(QEMU),1)
-+	XARGO_FLAGS ?= --features=qemu
++	CARGO_FLAGS ?= --features=qemu
 +else
-+	XARGO_FLAGS ?= 
++	CARGO_FLAGS ?= 
 +endif
  
  CC := $(CROSS)-gcc
@@ -170,30 +191,64 @@ index 3572bad..71ce800 100644
 +PI_TTY ?= /dev/tty.SLAB_USBtoUART -b 230400
  CCFLAGS ?= -Wall -O2 -nostdlib -nostartfiles -ffreestanding -pie -fpie
  LDFLAGS ?= --gc-sections -static -nostdlib -nostartfiles --no-dynamic-linker
- XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
-@@ -18,7 +23,7 @@ RUST_RELEASE_LIB := $(RUST_BUILD_DIR)/release/lib$(RUST_BINARY).a
+-XARGO ?= CARGO_INCREMENTAL=0 RUST_TARGET_PATH="$(shell pwd)" xargo
++CARGO_XBUILD ?= RUST_TARGET_PATH="$(shell pwd)" cargo xbuild --target=$(TARGET) -v
+ CARGO ?= cargo
+ 
+ LD_LAYOUT := ext/layout.ld
+@@ -18,9 +23,9 @@ RUST_RELEASE_LIB := $(RUST_BUILD_DIR)/release/lib$(RUST_BINARY).a
  
  RUST_LIB_DEPS = ../pi/src/* ../pi/src/*/** \
  				../../1-shell/stack-vec/src/* \
 -				../../2-fs/fat32/src/* ../../2-fs/fat32/src/*/**
 +				../../2-fs/fat32/src/* ../../2-fs/fat32/src/*/** src/*/**
  
- RUST_DEPS = Xargo.toml Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
+-RUST_DEPS = Xargo.toml Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
++RUST_DEPS = Cargo.toml build.rs $(LD_LAYOUT) src/* $(RUST_LIB_DEPS)
  EXT_DEPS = $(BUILD_DIR)/init.o
+ 
+ BUILD_DIR := build
+@@ -34,7 +39,7 @@ VPATH = ext
+ all: $(KERNEL).hex $(KERNEL).bin
+ 
+ check:
+-	@$(XARGO) check --target=$(TARGET)
++	@$(CARGO) check
+ 
+ test:
+ 	@$(CARGO) test
 @@ -44,11 +49,11 @@ install: $(KERNEL).bin
  
  $(RUST_DEBUG_LIB): $(RUST_DEPS)
  	@echo "+ Building $@ [xargo]"
 -	@$(XARGO) build --target=$(TARGET)
-+	@$(XARGO) build --target=$(TARGET) $(XARGO_FLAGS)
++	@$(CARGO_XBUILD) $(CARGO_FLAGS)
  
  $(RUST_RELEASE_LIB): $(RUST_DEPS)
  	@echo "+ Building $@ [xargo --release]"
 -	@$(XARGO) build --release --target=$(TARGET)
-+	@$(XARGO) build --release --target=$(TARGET) $(XARGO_FLAGS)
++	@$(CARGO_XBUILD) --release $(CARGO_FLAGS)
  
  ifeq ($(DEBUG),1)
  $(RUST_LIB): $(RUST_DEBUG_LIB) | $(BUILD_DIR)
+@@ -82,5 +87,5 @@ $(KERNEL).bin: $(KERNEL).elf | $(BUILD_DIR)
+ 	@$(CROSS)-objcopy $< -O binary $@
+ 
+ clean:
+-	$(XARGO) clean
++	$(CARGO) clean
+ 	rm -rf $(BUILD_DIR)
+diff --git a/kernel/build.rs b/kernel/build.rs
+index 3952d72..79ee725 100644
+--- a/kernel/build.rs
++++ b/kernel/build.rs
+@@ -1,5 +1,5 @@
+ pub fn main() {
+-    if ::std::env::var("TARGET").unwrap() == "aarch64-none-elf" {
++    if ::std::env::var("TARGET").unwrap().contains("aarch64-none-elf") {
+         println!("cargo:rustc-link-search=native=ext");
+         println!("cargo:rustc-link-lib=static=sd");
+         println!("cargo:rerun-if-changed=ext/libsd.a");
 diff --git a/kernel/ext/init.S b/kernel/ext/init.S
 index 7941cd7..740a6e5 100644
 --- a/kernel/ext/init.S
@@ -335,14 +390,15 @@ index 7941cd7..740a6e5 100644
 +    HANDLER(3,2)
 +    HANDLER(3,3)
 diff --git a/kernel/src/allocator/bin.rs b/kernel/src/allocator/bin.rs
-index 5cde581..ff6c76a 100644
+index 5cde581..67b6e23 100644
 --- a/kernel/src/allocator/bin.rs
 +++ b/kernel/src/allocator/bin.rs
 @@ -1,19 +1,46 @@
 +use std::cmp::max;
 +use std::cmp::min;
  use std::fmt;
- use alloc::heap::{AllocErr, Layout};
+-use alloc::heap::{AllocErr, Layout};
++use alloc::alloc::{AllocErr, Layout};
  
  use allocator::util::*;
  use allocator::linked_list::LinkedList;
@@ -416,7 +472,7 @@ index 5cde581..ff6c76a 100644
 +                return result;
 +            }
 +        }
-+        Err(AllocErr::Exhausted { request: layout })
++        Err(AllocErr {})
      }
  
      /// Deallocates the memory referenced by `ptr`.
@@ -470,7 +526,7 @@ index 5cde581..ff6c76a 100644
 +    }
 +}
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
-index e8741cf..02ae36e 100644
+index e8741cf..6aebc2a 100644
 --- a/kernel/src/allocator/bump.rs
 +++ b/kernel/src/allocator/bump.rs
 @@ -13,7 +13,10 @@ impl Allocator {
@@ -493,7 +549,7 @@ index e8741cf..02ae36e 100644
 +        let new_start = align_up(self.current, layout.align()).saturating_add(layout.size());
 +
 +        if new_start >= self.end {
-+            return Err(AllocErr::Exhausted { request: layout });
++            return Err(AllocErr);
 +        }
 +
 +        self.current = new_start;
@@ -510,10 +566,10 @@ index e8741cf..02ae36e 100644
      }
  }
 diff --git a/kernel/src/allocator/mod.rs b/kernel/src/allocator/mod.rs
-index f82206d..5d3c145 100644
+index f82206d..3f0b943 100644
 --- a/kernel/src/allocator/mod.rs
 +++ b/kernel/src/allocator/mod.rs
-@@ -1,7 +1,7 @@
+@@ -1,15 +1,16 @@
  mod linked_list;
  mod util;
  
@@ -522,32 +578,47 @@ index f82206d..5d3c145 100644
  mod imp;
  
  #[cfg(test)]
-@@ -10,6 +10,7 @@ mod tests;
+ mod tests;
+ 
  use mutex::Mutex;
- use alloc::heap::{Alloc, AllocErr, Layout};
+-use alloc::heap::{Alloc, AllocErr, Layout};
++use std::{GlobalAlloc, Layout};
  use std::cmp::max;
 +use pi::atags::Atags;
  
  /// Thread-safe (locking) wrapper around a particular memory allocator.
  #[derive(Debug)]
-@@ -57,7 +58,11 @@ unsafe impl<'a> Alloc for &'a Allocator {
+@@ -35,7 +36,7 @@ impl Allocator {
+     }
+ }
+ 
+-unsafe impl<'a> Alloc for &'a Allocator {
++unsafe impl GlobalAlloc for Allocator {
+     /// Allocates memory. Returns a pointer meeting the size and alignment
+     /// properties of `layout.size()` and `layout.align()`.
+     ///
+@@ -56,8 +57,12 @@ unsafe impl<'a> Alloc for &'a Allocator {
+     /// Returning `Err` indicates that either memory is exhausted
      /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
      /// size or alignment constraints (`AllocError::Unsupported`).
-     unsafe fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
+-    unsafe fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocErr> {
 -        self.0.lock().as_mut().expect("allocator uninitialized").alloc(layout)
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
 +        self.0
 +            .lock()
 +            .as_mut()
 +            .expect("allocator uninitialized")
-+            .alloc(layout)
++            .alloc(layout).unwrap()
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -74,7 +79,11 @@ unsafe impl<'a> Alloc for &'a Allocator {
+@@ -73,8 +78,12 @@ unsafe impl<'a> Alloc for &'a Allocator {
+     ///
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
-     unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+-    unsafe fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
 -        self.0.lock().as_mut().expect("allocator uninitialized").dealloc(ptr, layout);
++    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
 +        self.0
 +            .lock()
 +            .as_mut()
@@ -867,29 +938,38 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..cdcc022 100644
+index e9522cd..040b4c6 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
-@@ -4,29 +4,32 @@
- #![feature(asm)]
- #![feature(optin_builtin_traits)]
+@@ -1,32 +1,32 @@
+-#![feature(lang_items)]
++#![feature(alloc, allocator_api)]
++#![feature(asm)]
+ #![feature(core_intrinsics)]
+ #![feature(const_fn)]
+-#![feature(asm)]
+-#![feature(optin_builtin_traits)]
  #![feature(decl_macro)]
 -#![feature(repr_align)]
- #![feature(attr_literals)]
+-#![feature(attr_literals)]
  #![feature(exclusive_range_pattern)]
 -#![feature(i128_type)]
- #![feature(never_type)]
- #![feature(unique)]
- #![feature(pointer_methods)]
+-#![feature(never_type)]
+-#![feature(unique)]
+-#![feature(pointer_methods)]
++#![feature(lang_items)]
  #![feature(naked_functions)]
- #![feature(fn_must_use)]
- #![feature(alloc, allocator_api, global_allocator)]
+-#![feature(fn_must_use)]
+-#![feature(alloc, allocator_api, global_allocator)]
++#![feature(never_type)]
++#![feature(optin_builtin_traits)]
 +#![feature(ptr_internals)]
-+#![feature(alloc_system)]
++#![feature(panic_info_message)]
  
  #[macro_use]
  #[allow(unused_imports)]
  extern crate alloc;
++extern crate core;
 +extern crate fat32;
  extern crate pi;
  extern crate stack_vec;
@@ -907,7 +987,7 @@ index e9522cd..cdcc022 100644
  pub mod fs;
  pub mod traps;
  pub mod aarch64;
-@@ -37,11 +40,21 @@ pub mod vm;
+@@ -37,11 +37,21 @@ pub mod vm;
  use allocator::Allocator;
  use fs::FileSystem;
  use process::GlobalScheduler;
@@ -929,7 +1009,7 @@ index e9522cd..cdcc022 100644
  pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
  
  pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
-@@ -50,4 +63,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +60,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -952,16 +1032,30 @@ index e9522cd..cdcc022 100644
 +    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
-index 3a1e46f..83848e3 100644
+index 3a1e46f..3b1432f 100644
 --- a/kernel/src/lang_items.rs
 +++ b/kernel/src/lang_items.rs
-@@ -3,8 +3,15 @@
- #[lang = "panic_fmt"]
- pub extern fn panic_fmt(fmt: ::std::fmt::Arguments, file: &'static str, line: u32, col: u32) -> ! {
-     // FIXME: Print `fmt`, `file`, and `line` to the console.
+@@ -1,10 +1,37 @@
++use core::panic::PanicInfo;
++use console::noblock_kprintln;
++use std::Layout;
++
+ #[no_mangle]
+ #[cfg(not(test))]
+-#[lang = "panic_fmt"]
+-pub extern fn panic_fmt(fmt: ::std::fmt::Arguments, file: &'static str, line: u32, col: u32) -> ! {
+-    // FIXME: Print `fmt`, `file`, and `line` to the console.
++#[panic_handler]
++pub extern fn panic_fmt(panic_info: &PanicInfo) -> ! {
 +    // Avoid deadlock
-+    use console::noblock_kprintln;
-+    noblock_kprintln!("Kernel Panic at file {}\n\t\tline {}, col {}: {}", file, line, col, fmt);
++    if let Some(location) = panic_info.location() {
++        noblock_kprintln!("Kernel Panic at file {} line {}, column {}", 
++            location.file(), location.line(), location.column());
++    }
++    if let Some(fmt) = panic_info.message() {
++        use console::noblock_kprintln;
++        noblock_kprintln!("\t message: {}", fmt);
++    }
  
 -    loop { unsafe { asm!("wfe") } }
 +    loop {
@@ -973,6 +1067,18 @@ index 3a1e46f..83848e3 100644
 +#[cfg(not(test))]
 +#[lang = "eh_personality"]
 +pub extern "C" fn eh_personality() {}
++
++#[cfg(not(test))]
++#[lang = "oom"]
++pub extern "C" fn oom(layout: Layout) -> ! {
++    // Avoid deadlock
++    noblock_kprintln!("Out of memory when allocating {:?}", layout);
++
++    loop {
++        unsafe { asm!("wfe") }
++    }
++}
+\ No newline at end of file
 diff --git a/kernel/src/mutex.rs b/kernel/src/mutex.rs
 index 79fba5f..16913c2 100644
 --- a/kernel/src/mutex.rs
@@ -1243,6 +1349,30 @@ index 669b464..26d951f 100644
 +        }
      }
  }
+diff --git a/kernel/src/process/stack.rs b/kernel/src/process/stack.rs
+index b3ba130..eb99828 100644
+--- a/kernel/src/process/stack.rs
++++ b/kernel/src/process/stack.rs
+@@ -1,8 +1,9 @@
+ use std::fmt;
+ use std::ptr::Unique;
++use std::GlobalAlloc;
+ 
+ use ALLOCATOR;
+-use alloc::allocator::{Alloc, Layout};
++use alloc::alloc::Layout;
+ use vm::PhysicalAddr;
+ 
+ /// A process stack. The default size is 1M1B with an alignment of 16 bytes.
+@@ -27,7 +28,7 @@ impl Stack {
+     /// fails for some other reason, returns `None`.
+     pub fn new() -> Option<Stack> {
+         let raw_ptr = unsafe {
+-            let raw_ptr: *mut u8 = (&ALLOCATOR).alloc(Stack::layout()).ok()?;
++            let raw_ptr: *mut u8 = (&ALLOCATOR).alloc(Stack::layout());
+             raw_ptr.write_bytes(0, Self::SIZE);
+             raw_ptr
+         };
 diff --git a/kernel/src/traps/irq.rs b/kernel/src/traps/irq.rs
 index 3d92f03..e9ca6ea 100644
 --- a/kernel/src/traps/irq.rs
@@ -2030,13 +2160,17 @@ index 0000000..2f6f8c5
 +}
 \ No newline at end of file
 diff --git a/pi/Cargo.toml b/pi/Cargo.toml
-index a2a5cbe..23b0d03 100644
+index a2a5cbe..d896e69 100644
 --- a/pi/Cargo.toml
 +++ b/pi/Cargo.toml
-@@ -8,3 +8,4 @@ volatile = { path = "../volatile" }
+@@ -5,6 +5,7 @@ authors = ["Sergio Benitez <sb@sergio.bz>"]
+ 
+ [dependencies]
+ volatile = { path = "../volatile" }
++std = { path = "../std" }
  
  [features]
- std = []
+-std = []
 +qemu = []
 \ No newline at end of file
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
@@ -2277,17 +2411,24 @@ index 33eb61d..7d1ea63 100644
      }
  }
 diff --git a/pi/src/lib.rs b/pi/src/lib.rs
-index 27b295e..3d1e81a 100644
+index 27b295e..5606b5a 100644
 --- a/pi/src/lib.rs
 +++ b/pi/src/lib.rs
-@@ -2,7 +2,6 @@
+@@ -2,14 +2,8 @@
  #![feature(const_fn)]
  #![feature(asm)]
  #![feature(decl_macro)]
 -#![feature(repr_align)]
- #![feature(attr_literals)]
+-#![feature(attr_literals)]
  #![feature(never_type)]
- #![feature(pointer_methods)]
+-#![feature(pointer_methods)]
+ 
+-#![cfg_attr(not(feature = "std"), no_std)]
+-
+-#[cfg(feature = "std")]
+ extern crate core;
+ extern crate volatile;
+ 
 diff --git a/pi/src/timer/generic_timer.rs b/pi/src/timer/generic_timer.rs
 new file mode 100644
 index 0000000..5193c25
@@ -2540,7 +2681,7 @@ index 0000000..42f034c
 +    Timer::new().tick_in(us)
 +}
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
-index 92b6159..91ca7a3 100644
+index 92b6159..e62c66b 100644
 --- a/pi/src/uart.rs
 +++ b/pi/src/uart.rs
 @@ -24,6 +24,26 @@ enum LsrStatus {
@@ -2618,7 +2759,7 @@ index 92b6159..91ca7a3 100644
      }
  
      /// Blocks until there is a byte ready to read. If a read timeout is set,
-@@ -78,17 +113,50 @@ impl MiniUart {
+@@ -78,19 +113,51 @@ impl MiniUart {
      /// returns `Ok(())`, a subsequent call to `read_byte` is guaranteed to
      /// return immediately.
      pub fn wait_for_byte(&self) -> Result<(), ()> {
@@ -2669,9 +2810,11 @@ index 92b6159..91ca7a3 100644
 +    }
 +}
  
- #[cfg(feature = "std")]
+-#[cfg(feature = "std")]
  mod uart_io {
-@@ -104,4 +172,34 @@ mod uart_io {
+     use std::io;
+     use super::MiniUart;
+@@ -104,4 +171,34 @@ mod uart_io {
      //
      // The `io::Write::write()` method must write all of the requested bytes
      // before returning.
@@ -2706,23 +2849,148 @@ index 92b6159..91ca7a3 100644
 +       }
 +    }
  }
+diff --git a/std/Cargo.toml b/std/Cargo.toml
+index 9096e5c..168f73d 100644
+--- a/std/Cargo.toml
++++ b/std/Cargo.toml
+@@ -3,4 +3,4 @@ name = "std"
+ version = "0.1.0"
+ authors = ["Sergio Benitez <sb@sergio.bz>"]
+ 
+-[dependencies]
++[dependencies]
+\ No newline at end of file
 diff --git a/std/src/collections/hash/map.rs b/std/src/collections/hash/map.rs
-index 4114354..ca6c7c9 100644
+index 4114354..78d8b7c 100644
 --- a/std/src/collections/hash/map.rs
 +++ b/std/src/collections/hash/map.rs
-@@ -1972,7 +1972,7 @@ impl<'a, K, V> Placer<V> for Entry<'a, K, V> {
- #[unstable(feature = "collection_placement",
-            reason = "placement protocol is subject to change",
-            issue = "30172")]
--impl<'a, K, V> Place<V> for EntryPlace<'a, K, V> {
-+unsafe impl<'a, K, V> Place<V> for EntryPlace<'a, K, V> {
-     fn pointer(&mut self) -> *mut V {
-         self.bucket.read_mut().1
+@@ -19,7 +19,7 @@ use fmt::{self, Debug};
+ use hash::{Hash, Hasher, BuildHasher, SipHasher13};
+ use iter::{FromIterator, FusedIterator};
+ use mem::{self, replace};
+-use ops::{Deref, Index, InPlace, Place, Placer};
++use ops::{Deref, Index};
+ use ptr;
+ //- use sys;
+ 
+@@ -1949,46 +1949,6 @@ impl<'a, K, V> Drop for EntryPlace<'a, K, V> {
      }
+ }
+ 
+-#[unstable(feature = "collection_placement",
+-           reason = "placement protocol is subject to change",
+-           issue = "30172")]
+-impl<'a, K, V> Placer<V> for Entry<'a, K, V> {
+-    type Place = EntryPlace<'a, K, V>;
+-
+-    fn make_place(self) -> EntryPlace<'a, K, V> {
+-        let b = match self {
+-            Occupied(mut o) => {
+-                unsafe { ptr::drop_in_place(o.elem.read_mut().1); }
+-                o.elem
+-            }
+-            Vacant(v) => {
+-                unsafe { v.insert_key() }
+-            }
+-        };
+-        EntryPlace { bucket: b }
+-    }
+-}
+-
+-#[unstable(feature = "collection_placement",
+-           reason = "placement protocol is subject to change",
+-           issue = "30172")]
+-impl<'a, K, V> Place<V> for EntryPlace<'a, K, V> {
+-    fn pointer(&mut self) -> *mut V {
+-        self.bucket.read_mut().1
+-    }
+-}
+-
+-#[unstable(feature = "collection_placement",
+-           reason = "placement protocol is subject to change",
+-           issue = "30172")]
+-impl<'a, K, V> InPlace<V> for EntryPlace<'a, K, V> {
+-    type Owner = ();
+-
+-    unsafe fn finalize(self) {
+-        mem::forget(self);
+-    }
+-}
+-
+ impl<'a, K, V> Entry<'a, K, V> {
+     #[stable(feature = "rust1", since = "1.0.0")]
+     /// Ensures a value is in the entry by inserting the default if empty, and returns
+@@ -3583,57 +3543,4 @@ mod test_map {
+         }
+         panic!("Adaptive early resize failed");
+     }
+-
+-    #[test]
+-    fn test_placement_in() {
+-        let mut map = HashMap::new();
+-        map.extend((0..10).map(|i| (i, i)));
+-
+-        map.entry(100) <- 100;
+-        assert_eq!(map[&100], 100);
+-
+-        map.entry(0) <- 10;
+-        assert_eq!(map[&0], 10);
+-
+-        assert_eq!(map.len(), 11);
+-    }
+-
+-    #[test]
+-    fn test_placement_panic() {
+-        let mut map = HashMap::new();
+-        map.extend((0..10).map(|i| (i, i)));
+-
+-        fn mkpanic() -> usize { panic!() }
+-
+-        // modify existing key
+-        // when panic happens, previous key is removed.
+-        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| { map.entry(0) <- mkpanic(); }));
+-        assert_eq!(map.len(), 9);
+-        assert!(!map.contains_key(&0));
+-
+-        // add new key
+-        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| { map.entry(100) <- mkpanic(); }));
+-        assert_eq!(map.len(), 9);
+-        assert!(!map.contains_key(&100));
+-    }
+-
+-    #[test]
+-    fn test_placement_drop() {
+-        // correctly drop
+-        struct TestV<'a>(&'a mut bool);
+-        impl<'a> Drop for TestV<'a> {
+-            fn drop(&mut self) {
+-                if !*self.0 { panic!("value double drop!"); } // no double drop
+-                *self.0 = false;
+-            }
+-        }
+-
+-        fn makepanic<'a>() -> TestV<'a> { panic!() }
+-
+-        let mut can_drop = true;
+-        let mut hm = HashMap::new();
+-        hm.insert(0, TestV(&mut can_drop));
+-        let _ = panic::catch_unwind(panic::AssertUnwindSafe(|| { hm.entry(0) <- makepanic(); }));
+-        assert_eq!(hm.len(), 0);
+-    }
+ }
 diff --git a/std/src/collections/hash/table.rs b/std/src/collections/hash/table.rs
-index 96f98ef..73bd574 100644
+index 96f98ef..78715ba 100644
 --- a/std/src/collections/hash/table.rs
 +++ b/std/src/collections/hash/table.rs
+@@ -8,7 +8,7 @@
+ // option. This file may not be copied, modified, or distributed
+ // except according to those terms.
+ 
+-use alloc::heap::{Heap, Alloc, Layout};
++use alloc::alloc::{Global, Alloc, Layout};
+ 
+ use cmp;
+ use hash::{BuildHasher, Hash, Hasher};
 @@ -16,7 +16,7 @@ use marker;
  use mem::{align_of, size_of, needs_drop};
  use mem;
@@ -2732,6 +3000,20 @@ index 96f98ef..73bd574 100644
  
  use self::BucketState::*;
  
+@@ -777,10 +777,10 @@ impl<K, V> RawTable<K, V> {
+                     .expect("capacity overflow"),
+                 "capacity overflow");
+ 
+-        let buffer = Heap.alloc(Layout::from_size_align(size, alignment).unwrap())
+-            .unwrap_or_else(|e| Heap.oom(e));
++        let buffer = Global.alloc(Layout::from_size_align(size, alignment).unwrap())
++            .unwrap();
+ 
+-        let hashes = buffer as *mut HashUint;
++        let hashes = buffer.cast().as_ptr();
+ 
+         RawTable {
+             capacity_mask: capacity.wrapping_sub(1),
 @@ -873,7 +873,7 @@ impl<K, V> RawTable<K, V> {
                  elems_left,
                  marker: marker::PhantomData,
@@ -2750,11 +3032,20 @@ index 96f98ef..73bd574 100644
      iter: RawBuckets<'static, K, V>,
      marker: marker::PhantomData<&'a RawTable<K, V>>,
  }
+@@ -1188,7 +1188,7 @@ unsafe impl<#[may_dangle] K, #[may_dangle] V> Drop for RawTable<K, V> {
+         debug_assert!(!oflo, "should be impossible");
+ 
+         unsafe {
+-            Heap.dealloc(self.hashes.ptr() as *mut u8,
++            Global.dealloc(NonNull::new_unchecked(self.hashes.ptr() as *mut u8),
+                          Layout::from_size_align(size, align).unwrap());
+             // Remember how everything was allocated out of one buffer
+             // during initialization? We only need one call to free here.
 diff --git a/std/src/collections/mod.rs b/std/src/collections/mod.rs
-index b8a6a66..892305f 100644
+index b8a6a66..e49f7a7 100644
 --- a/std/src/collections/mod.rs
 +++ b/std/src/collections/mod.rs
-@@ -420,7 +420,9 @@
+@@ -420,23 +420,30 @@
  #![stable(feature = "rust1", since = "1.0.0")]
  
  #[stable(feature = "rust1", since = "1.0.0")]
@@ -2763,9 +3054,20 @@ index b8a6a66..892305f 100644
 +#[doc(hidden)]
 +pub use ops::Bound;
  #[stable(feature = "rust1", since = "1.0.0")]
- pub use alloc::{BinaryHeap, BTreeMap, BTreeSet};
+-pub use alloc::{BinaryHeap, BTreeMap, BTreeSet};
++pub use alloc::collections::{BinaryHeap, BTreeMap, BTreeSet};
  #[stable(feature = "rust1", since = "1.0.0")]
-@@ -435,8 +437,13 @@ pub use self::hash_map::HashMap;
+-pub use alloc::{LinkedList, VecDeque};
++pub use alloc::collections::{LinkedList, VecDeque};
+ #[stable(feature = "rust1", since = "1.0.0")]
+-pub use alloc::{binary_heap, btree_map, btree_set};
++pub use alloc::collections::{binary_heap, btree_map, btree_set};
+ #[stable(feature = "rust1", since = "1.0.0")]
+-pub use alloc::{linked_list, vec_deque};
++pub use alloc::collections::{linked_list, vec_deque};
+ 
+ #[stable(feature = "rust1", since = "1.0.0")]
+ pub use self::hash_map::HashMap;
  #[stable(feature = "rust1", since = "1.0.0")]
  pub use self::hash_set::HashSet;
  
@@ -2782,9 +3084,41 @@ index b8a6a66..892305f 100644
  mod hash;
  
 diff --git a/std/src/error.rs b/std/src/error.rs
-index eb5022a..7e68932 100644
+index eb5022a..9906794 100644
 --- a/std/src/error.rs
 +++ b/std/src/error.rs
+@@ -51,7 +51,7 @@
+ // coherence challenge (e.g., specialization, neg impls, etc) we can
+ // reconsider what crate these items belong in.
+ 
+-use alloc::allocator;
++use alloc::alloc::{AllocErr, CannotReallocInPlace};
+ use any::TypeId;
+ use borrow::Cow;
+ use cell;
+@@ -242,18 +242,18 @@ impl Error for ! {
+ #[unstable(feature = "allocator_api",
+            reason = "the precise API and guarantees it provides may be tweaked.",
+            issue = "32838")]
+-impl Error for allocator::AllocErr {
++impl Error for AllocErr {
+     fn description(&self) -> &str {
+-        allocator::AllocErr::description(self)
++        AllocErr::description(self)
+     }
+ }
+ 
+ #[unstable(feature = "allocator_api",
+            reason = "the precise API and guarantees it provides may be tweaked.",
+            issue = "32838")]
+-impl Error for allocator::CannotReallocInPlace {
++impl Error for CannotReallocInPlace {
+     fn description(&self) -> &str {
+-        allocator::CannotReallocInPlace::description(self)
++        CannotReallocInPlace::description(self)
+     }
+ }
+ 
 @@ -371,14 +371,6 @@ impl Error for char::ParseCharError {
      }
  }
@@ -2833,24 +3167,235 @@ index c844770..4af7098 100644
                      "cursor position exceeds maximum possible vector length")
      })?;
 diff --git a/std/src/lib.rs b/std/src/lib.rs
-index ec56ad9..78fe68d 100644
+index ec56ad9..81698eb 100644
 --- a/std/src/lib.rs
 +++ b/std/src/lib.rs
-@@ -267,7 +267,7 @@
+@@ -238,7 +238,6 @@
+ // compiler details that will never be stable
+ #![feature(alloc)]
+ #![feature(allocator_api)]
+-#![feature(alloc_system)]
+ #![feature(allocator_internals)]
+ #![feature(allow_internal_unsafe)]
+ #![feature(allow_internal_unstable)]
+@@ -246,85 +245,55 @@
+ #![feature(array_error_internals)]
+ #![feature(ascii_ctype)]
+ #![feature(asm)]
+-#![feature(attr_literals)]
+ #![feature(box_syntax)]
+ #![feature(cfg_target_has_atomic)]
+ #![feature(cfg_target_thread_local)]
+ #![feature(cfg_target_vendor)]
+ #![feature(char_error_internals)]
+-#![feature(char_internals)]
+ #![feature(collections_range)]
+-#![feature(compiler_builtins_lib)]
++#![feature(core_panic_info)]
+ #![feature(const_fn)]
+-#![feature(core_float)]
+ #![feature(core_intrinsics)]
+ #![feature(dropck_eyepatch)]
+ #![feature(exact_size_is_empty)]
+-#![feature(fs_read_write)]
+ #![feature(fixed_size_array)]
+-#![feature(float_from_str_radix)]
+ #![feature(fn_traits)]
  #![feature(fnbox)]
  #![feature(fused)]
- #![feature(generic_param_attrs)]
+-#![feature(generic_param_attrs)]
 -#![feature(hashmap_hasher)]
+-#![feature(heap_api)]
 +#![feature(hashmap_internals)]
- #![feature(heap_api)]
  #![feature(i128)]
- #![feature(i128_type)]
-@@ -358,7 +358,7 @@ use prelude::v1::*;
- // imported by the compiler (via our #[no_std] attribute) In this case we just
- // add a new crate name so we can attach the re-exports to it.
- //- #[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq,
--#[macro_reexport(panic, assert, assert_eq, assert_ne, debug_assert, debug_assert_eq,
-+#[macro_reexport(panic, assert_eq, assert_ne, debug_assert, debug_assert_eq,
-                  debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
- extern crate core as __core;
+-#![feature(i128_type)]
+-#![feature(inclusive_range)]
+ #![feature(int_error_internals)]
+ #![feature(integer_atomics)]
+-#![feature(into_cow)]
+ #![feature(lang_items)]
+ #![feature(libc)]
+ #![feature(link_args)]
+ #![feature(linkage)]
+-#![feature(macro_reexport)]
+-#![feature(macro_vis_matcher)]
+ #![feature(needs_panic_runtime)]
+ #![feature(never_type)]
+-#![feature(num_bits_bytes)]
+-#![feature(old_wrapping)]
+ #![feature(on_unimplemented)]
+-#![feature(oom)]
+ #![feature(optin_builtin_traits)]
+-#![feature(panic_unwind)]
+-#![feature(peek)]
+-#![feature(placement_in_syntax)]
+-#![feature(placement_new_protocol)]
++#![feature(panic_internals)]
+ #![feature(prelude_import)]
+ #![feature(ptr_internals)]
+-#![feature(rand)]
+ #![feature(raw)]
+-#![feature(repr_align)]
+ #![feature(rustc_attrs)]
+-#![feature(sip_hash_13)]
+-#![feature(slice_bytes)]
+ #![feature(slice_concat_ext)]
+ #![feature(slice_internals)]
+ #![feature(slice_patterns)]
+ #![feature(staged_api)]
+ #![feature(stmt_expr_attributes)]
+-#![feature(str_char)]
+ #![feature(str_internals)]
+-#![feature(str_utf16)]
+-#![feature(termination_trait)]
+ #![feature(test, rustc_private)]
+ #![feature(thread_local)]
+ #![feature(toowned_clone_into)]
+ #![feature(try_from)]
+ #![feature(unboxed_closures)]
+-#![feature(unicode)]
+ #![feature(untagged_unions)]
+ #![feature(unwind_attributes)]
+-#![feature(vec_push_all)]
+ #![feature(doc_cfg)]
+ #![feature(doc_masked)]
+ #![feature(doc_spotlight)]
  
+-#![feature(shared)] //- added due to no NonNull changes
+-#![feature(unique)] //- added due to no NonNull changes
+-
+ //- #![cfg_attr(test, feature(update_panic_count))]
+ //- #![cfg_attr(windows, feature(used))]
+ 
+@@ -354,19 +323,16 @@ use prelude::v1::*;
+ //- #[cfg(test)] extern crate test;
+ //- #[cfg(test)] extern crate rand;
+ 
+-// We want to re-export a few macros from core but libcore has already been
+-// imported by the compiler (via our #[no_std] attribute) In this case we just
+-// add a new crate name so we can attach the re-exports to it.
+-//- #[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq,
+-#[macro_reexport(panic, assert, assert_eq, assert_ne, debug_assert, debug_assert_eq,
+-                 debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
+-extern crate core as __core;
++// Re-export a few macros from core
++#[stable(feature = "rust1", since = "1.0.0")]
++pub use core::{assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne};
++#[stable(feature = "rust1", since = "1.0.0")]
++pub use core::{unreachable, unimplemented, write, writeln, try, panic};
+ 
+-// #[macro_use]
+-#[macro_reexport(vec, format)]
++#[allow(unused_imports)] // macros from `alloc` are not used on all platforms
++#[macro_use]
+ extern crate alloc;
+ //- extern crate alloc_system;
+-extern crate std_unicode;
+ //- #[doc(masked)]
+ //- extern crate libc;
+ 
+@@ -375,10 +341,6 @@ extern crate std_unicode;
+ //- #[allow(unused_extern_crates)]
+ //- extern crate unwind;
+ 
+-// compiler-rt intrinsics
+-#[doc(masked)]
+-extern crate compiler_builtins;
+-
+ //- // During testing, this crate is not actually the "real" std library, but rather
+ //- // it links to the real std library, which was compiled from this same source
+ //- // code. So any lang items std defines are conditionally excluded (or else they
+@@ -437,7 +399,7 @@ pub use core::i16;
+ pub use core::i32;
+ #[stable(feature = "rust1", since = "1.0.0")]
+ pub use core::i64;
+-#[unstable(feature = "i128", issue = "35118")]
++#[stable(feature = "i128", since = "1.26.0")]
+ pub use core::i128;
+ #[stable(feature = "rust1", since = "1.0.0")]
+ pub use core::usize;
+@@ -466,9 +428,13 @@ pub use alloc::string;
+ #[stable(feature = "rust1", since = "1.0.0")]
+ pub use alloc::vec;
+ #[stable(feature = "rust1", since = "1.0.0")]
+-pub use std_unicode::char;
+-#[unstable(feature = "i128", issue = "35118")]
++pub use core::char;
++#[stable(feature = "i128", since = "1.26.0")]
+ pub use core::u128;
++#[stable(feature = "core_hint", since = "1.27.0")]
++pub use core::hint;
++#[unstable(issue = "32838", feature = "allocator_api")]
++pub use core::alloc::{GlobalAlloc, Layout};
+ 
+ //- pub mod f32;
+ //- pub mod f64;
+@@ -497,6 +463,7 @@ pub mod sync;
+ mod sys_common;
+ mod sys;
+ 
++
+ // Private support modules
+ //- mod panicking;
+ mod memchr;
+diff --git a/std/src/primitive_docs.rs b/std/src/primitive_docs.rs
+index a2caf47..03c4c98 100644
+--- a/std/src/primitive_docs.rs
++++ b/std/src/primitive_docs.rs
+@@ -772,7 +772,7 @@ mod prim_i64 { }
+ /// However, please note that examples are shared between primitive integer
+ /// types. So it's normal if you see usage of types like `i8` in there.
+ ///
+-#[unstable(feature = "i128", issue="35118")]
++#[stable(feature = "i128", since = "1.26.0")]
+ mod prim_i128 { }
+ 
+ #[doc(primitive = "u8")]
+@@ -832,7 +832,7 @@ mod prim_u64 { }
+ /// However, please note that examples are shared between primitive integer
+ /// types. So it's normal if you see usage of types like `u8` in there.
+ ///
+-#[unstable(feature = "i128", issue="35118")]
++#[stable(feature = "i128", since = "1.26.0")]
+ mod prim_u128 { }
+ 
+ #[doc(primitive = "isize")]
+diff --git a/std/src/sync/mod.rs b/std/src/sync/mod.rs
+index cbd90ff..d8833bb 100644
+--- a/std/src/sync/mod.rs
++++ b/std/src/sync/mod.rs
+@@ -18,7 +18,7 @@
+ #![stable(feature = "rust1", since = "1.0.0")]
+ 
+ #[stable(feature = "rust1", since = "1.0.0")]
+-pub use alloc::arc::{Arc, Weak};
++pub use alloc::sync::{Arc, Weak};
+ #[stable(feature = "rust1", since = "1.0.0")]
+ pub use core::sync::atomic;
+ 
+diff --git a/std/src/sys/ros/mod.rs b/std/src/sys/ros/mod.rs
+index 77734fd..d942211 100644
+--- a/std/src/sys/ros/mod.rs
++++ b/std/src/sys/ros/mod.rs
+@@ -34,7 +34,7 @@ pub mod os_str {
+     use sync::Arc;
+     use sys_common::{AsInner, IntoInner};
+     use sys_common::bytestring::debug_fmt_bytestring;
+-    use std_unicode::lossy::Utf8Lossy;
++    use core::str::lossy::Utf8Lossy;
+ 
+     #[derive(Clone, Hash)]
+     pub struct Buf {
+diff --git a/std/src/sys_common/bytestring.rs b/std/src/sys_common/bytestring.rs
+index eb9cad0..971b839 100644
+--- a/std/src/sys_common/bytestring.rs
++++ b/std/src/sys_common/bytestring.rs
+@@ -11,7 +11,7 @@
+ #![allow(dead_code)]
+ 
+ use fmt::{Formatter, Result, Write};
+-use std_unicode::lossy::{Utf8Lossy, Utf8LossyChunk};
++use core::str::lossy::{Utf8Lossy, Utf8LossyChunk};
+ 
+ pub fn debug_fmt_bytestring(slice: &[u8], f: &mut Formatter) -> Result {
+     // Writes out a valid unicode string with the correct escape sequences
