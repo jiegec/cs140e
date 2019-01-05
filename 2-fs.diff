@@ -1,12 +1,16 @@
 diff --git a/fat32/Cargo.toml b/fat32/Cargo.toml
-index 725fe5a..c4053c0 100644
+index 725fe5a..d97f199 100644
 --- a/fat32/Cargo.toml
 +++ b/fat32/Cargo.toml
-@@ -4,6 +4,7 @@ version = "0.1.0"
+@@ -3,7 +3,11 @@ name = "fat32"
+ version = "0.1.0"
  authors = ["Sergio Benitez <sb@sergio.bz>"]
  
++[features]
++custom_std = ["std"]
++
  [dependencies]
-+std = { path = "../../os/std" }
++std = { path = "../../os/std" , optional = true}
  
  [dev-dependencies]
 -rand = "0.4"

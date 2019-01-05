@@ -135,10 +135,10 @@ index 0000000..a0df9dc
 +}
 \ No newline at end of file
 diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
-index eadd84a..d3f6283 100644
+index eadd84a..4672243 100644
 --- a/kernel/Cargo.toml
 +++ b/kernel/Cargo.toml
-@@ -2,14 +2,17 @@
+@@ -2,14 +2,18 @@
  name = "kernel"
  version = "0.1.0"
  authors = ["Sergio Benitez <sb@sergio.bz>"]
@@ -150,6 +150,7 @@ index eadd84a..d3f6283 100644
  
 +[features]
 +qemu = ["pi/qemu"]
++no_test = ["std", "fat32/custom_std", "pi/custom_std"]
 +
  [profile.dev]
  panic = "abort"
@@ -157,7 +158,7 @@ index eadd84a..d3f6283 100644
  debug = true
  
  [profile.test]
-@@ -21,10 +24,12 @@ panic = "abort"
+@@ -21,10 +25,12 @@ panic = "abort"
  lto = true
  
  [dependencies]
@@ -170,19 +171,19 @@ index eadd84a..d3f6283 100644
  # from assignment 2
  fat32 = { path = "../../2-fs/fat32/" }
 +
-+std = { path = "../std" }
++std = { path = "../std", optional = true }
 \ No newline at end of file
 diff --git a/kernel/Makefile b/kernel/Makefile
-index 3572bad..5ba1a22 100644
+index 3572bad..3634d88 100644
 --- a/kernel/Makefile
 +++ b/kernel/Makefile
 @@ -1,12 +1,17 @@
  TARGET ?= aarch64-none-elf
  CROSS ?= $(TARGET)
 +ifeq ($(QEMU),1)
-+	CARGO_FLAGS ?= --features=qemu
++	CARGO_FLAGS ?= --features qemu,no_test
 +else
-+	CARGO_FLAGS ?= 
++	CARGO_FLAGS ?= --features no_test
 +endif
  
  CC := $(CROSS)-gcc
@@ -526,9 +527,15 @@ index 5cde581..67b6e23 100644
 +    }
 +}
 diff --git a/kernel/src/allocator/bump.rs b/kernel/src/allocator/bump.rs
-index e8741cf..6aebc2a 100644
+index e8741cf..89ea261 100644
 --- a/kernel/src/allocator/bump.rs
 +++ b/kernel/src/allocator/bump.rs
+@@ -1,4 +1,4 @@
+-use alloc::heap::{AllocErr, Layout};
++use alloc::alloc::{AllocErr, Layout};
+ 
+ use allocator::util::*;
+ 
 @@ -13,7 +13,10 @@ impl Allocator {
      /// Creates a new bump allocator that will allocate memory from the region
      /// starting at address `start` and ending at address `end`.
@@ -566,10 +573,10 @@ index e8741cf..6aebc2a 100644
      }
  }
 diff --git a/kernel/src/allocator/mod.rs b/kernel/src/allocator/mod.rs
-index f82206d..3f0b943 100644
+index f82206d..3be76fe 100644
 --- a/kernel/src/allocator/mod.rs
 +++ b/kernel/src/allocator/mod.rs
-@@ -1,15 +1,16 @@
+@@ -1,15 +1,19 @@
  mod linked_list;
  mod util;
  
@@ -582,13 +589,16 @@ index f82206d..3f0b943 100644
  
  use mutex::Mutex;
 -use alloc::heap::{Alloc, AllocErr, Layout};
++#[cfg(test)]
++use std::alloc::{GlobalAlloc, Layout};
++#[cfg(not(test))]
 +use std::{GlobalAlloc, Layout};
  use std::cmp::max;
 +use pi::atags::Atags;
  
  /// Thread-safe (locking) wrapper around a particular memory allocator.
  #[derive(Debug)]
-@@ -35,7 +36,7 @@ impl Allocator {
+@@ -35,7 +39,7 @@ impl Allocator {
      }
  }
  
@@ -597,7 +607,7 @@ index f82206d..3f0b943 100644
      /// Allocates memory. Returns a pointer meeting the size and alignment
      /// properties of `layout.size()` and `layout.align()`.
      ///
-@@ -56,8 +57,12 @@ unsafe impl<'a> Alloc for &'a Allocator {
+@@ -56,8 +60,12 @@ unsafe impl<'a> Alloc for &'a Allocator {
      /// Returning `Err` indicates that either memory is exhausted
      /// (`AllocError::Exhausted`) or `layout` does not meet this allocator's
      /// size or alignment constraints (`AllocError::Unsupported`).
@@ -612,7 +622,7 @@ index f82206d..3f0b943 100644
      }
  
      /// Deallocates the memory referenced by `ptr`.
-@@ -73,8 +78,12 @@ unsafe impl<'a> Alloc for &'a Allocator {
+@@ -73,8 +81,12 @@ unsafe impl<'a> Alloc for &'a Allocator {
      ///
      /// Parameters not meeting these conditions may result in undefined
      /// behavior.
@@ -627,14 +637,13 @@ index f82206d..3f0b943 100644
      }
  }
  
-@@ -87,7 +96,21 @@ extern "C" {
+@@ -87,7 +99,21 @@ extern "C" {
  ///
  /// This function is expected to return `Some` under all normal cirumstances.
  fn memory_map() -> Option<(usize, usize)> {
 -    let binary_end = unsafe { (&_end as *const u8) as u32 };
 +    let binary_end = unsafe { (&_end as *const u8) as usize };
- 
--    unimplemented!("memory map fetch")
++
 +    for tag in Atags::get() {
 +        match tag.mem() {
 +            Some(mem) => {
@@ -648,9 +657,32 @@ index f82206d..3f0b943 100644
 +            _ => {}
 +        }
 +    }
-+
+ 
+-    unimplemented!("memory map fetch")
 +    None
  }
+diff --git a/kernel/src/allocator/tests.rs b/kernel/src/allocator/tests.rs
+index 298b41c..b8aa987 100644
+--- a/kernel/src/allocator/tests.rs
++++ b/kernel/src/allocator/tests.rs
+@@ -59,7 +59,7 @@ mod allocator {
+     #[allow(dead_code)] mod bump;
+     #[allow(dead_code)] mod bin;
+ 
+-    use alloc::allocator::{AllocErr, Layout};
++    use alloc::alloc::{AllocErr, Layout};
+     use alloc::raw_vec::RawVec;
+ 
+     macro test_allocators {
+@@ -119,7 +119,7 @@ mod allocator {
+ 
+     test_allocators!(bin_exhausted, bump_exhausted, 128, |(_, _, mut a)| {
+         let e = a.alloc(layout!(1024, 128)).unwrap_err();
+-        assert_eq!(e, AllocErr::Exhausted { request: layout!(1024, 128) })
++        assert_eq!(e, AllocErr { })
+     });
+ 
+     test_allocators!(bin_alloc, bump_alloc, 8 * (1 << 20), |(start, end, a)| {
 diff --git a/kernel/src/allocator/util.rs b/kernel/src/allocator/util.rs
 index 11e0477..9e5c552 100644
 --- a/kernel/src/allocator/util.rs
@@ -689,10 +721,17 @@ index 11e0477..9e5c552 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/src/console.rs b/kernel/src/console.rs
-index e0f18f9..35609c1 100644
+index e0f18f9..bd9bcc3 100644
 --- a/kernel/src/console.rs
 +++ b/kernel/src/console.rs
-@@ -7,7 +7,7 @@ use mutex::Mutex;
+@@ -1,13 +1,14 @@
+ use std::io;
+ use std::fmt;
+ 
++use pi::uart;
+ use pi::uart::MiniUart;
+ 
+ use mutex::Mutex;
  
  /// A global singleton allowing read/write access to the console.
  pub struct Console {
@@ -701,7 +740,7 @@ index e0f18f9..35609c1 100644
  }
  
  impl Console {
-@@ -19,35 +19,36 @@ impl Console {
+@@ -19,35 +20,36 @@ impl Console {
      /// Initializes the console if it's not already initialized.
      #[inline]
      fn initialize(&mut self) {
@@ -740,11 +779,11 @@ index e0f18f9..35609c1 100644
  impl io::Write for Console {
      fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
 -        unimplemented!()
-+        self.inner().write(buf)
++       self.inner().write(buf)
      }
  
      fn flush(&mut self) -> io::Result<()> {
-@@ -57,7 +58,7 @@ impl io::Write for Console {
+@@ -57,7 +59,7 @@ impl io::Write for Console {
  
  impl fmt::Write for Console {
      fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -753,7 +792,7 @@ index e0f18f9..35609c1 100644
      }
  }
  
-@@ -89,3 +90,23 @@ pub macro kprintln {
+@@ -89,3 +91,23 @@ pub macro kprintln {
  pub macro kprint($($arg:tt)*) {
      _print(format_args!($($arg)*))
  }
@@ -938,10 +977,10 @@ index 0eb2632..0a59d14 100644
  
      fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
 diff --git a/kernel/src/kmain.rs b/kernel/src/kmain.rs
-index e9522cd..040b4c6 100644
+index e9522cd..c181ff9 100644
 --- a/kernel/src/kmain.rs
 +++ b/kernel/src/kmain.rs
-@@ -1,32 +1,32 @@
+@@ -1,32 +1,33 @@
 -#![feature(lang_items)]
 +#![feature(alloc, allocator_api)]
 +#![feature(asm)]
@@ -965,6 +1004,7 @@ index e9522cd..040b4c6 100644
 +#![feature(optin_builtin_traits)]
 +#![feature(ptr_internals)]
 +#![feature(panic_info_message)]
++#![feature(raw_vec_internals)]
  
  #[macro_use]
  #[allow(unused_imports)]
@@ -987,7 +1027,7 @@ index e9522cd..040b4c6 100644
  pub mod fs;
  pub mod traps;
  pub mod aarch64;
-@@ -37,11 +37,21 @@ pub mod vm;
+@@ -37,11 +38,19 @@ pub mod vm;
  use allocator::Allocator;
  use fs::FileSystem;
  use process::GlobalScheduler;
@@ -999,9 +1039,7 @@ index e9522cd..040b4c6 100644
  pub static ALLOCATOR: Allocator = Allocator::uninitialized();
  
 +#[cfg(test)]
-+extern crate alloc_system;
-+#[cfg(test)]
-+use alloc_system::System;
++use std::alloc::System;
 +#[cfg(test)]
 +#[global_allocator]
 +pub static ALLOCATOR: System = System;
@@ -1009,7 +1047,7 @@ index e9522cd..040b4c6 100644
  pub static FILE_SYSTEM: FileSystem = FileSystem::uninitialized();
  
  pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
-@@ -50,4 +60,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
+@@ -50,4 +59,21 @@ pub static SCHEDULER: GlobalScheduler = GlobalScheduler::uninitialized();
  #[cfg(not(test))]
  pub extern "C" fn kmain() {
      ALLOCATOR.initialize();
@@ -1032,12 +1070,13 @@ index e9522cd..040b4c6 100644
 +    }
  }
 diff --git a/kernel/src/lang_items.rs b/kernel/src/lang_items.rs
-index 3a1e46f..3b1432f 100644
+index 3a1e46f..d64a9db 100644
 --- a/kernel/src/lang_items.rs
 +++ b/kernel/src/lang_items.rs
-@@ -1,10 +1,37 @@
+@@ -1,10 +1,38 @@
 +use core::panic::PanicInfo;
 +use console::noblock_kprintln;
++#[cfg(not(test))]
 +use std::Layout;
 +
  #[no_mangle]
@@ -1350,13 +1389,16 @@ index 669b464..26d951f 100644
      }
  }
 diff --git a/kernel/src/process/stack.rs b/kernel/src/process/stack.rs
-index b3ba130..eb99828 100644
+index b3ba130..7d5e94d 100644
 --- a/kernel/src/process/stack.rs
 +++ b/kernel/src/process/stack.rs
-@@ -1,8 +1,9 @@
+@@ -1,8 +1,12 @@
  use std::fmt;
  use std::ptr::Unique;
++#[cfg(not(test))]
 +use std::GlobalAlloc;
++#[cfg(test)]
++use std::alloc::GlobalAlloc;
  
  use ALLOCATOR;
 -use alloc::allocator::{Alloc, Layout};
@@ -1364,7 +1406,7 @@ index b3ba130..eb99828 100644
  use vm::PhysicalAddr;
  
  /// A process stack. The default size is 1M1B with an alignment of 16 bytes.
-@@ -27,7 +28,7 @@ impl Stack {
+@@ -27,7 +31,7 @@ impl Stack {
      /// fails for some other reason, returns `None`.
      pub fn new() -> Option<Stack> {
          let raw_ptr = unsafe {
@@ -2160,18 +2202,19 @@ index 0000000..2f6f8c5
 +}
 \ No newline at end of file
 diff --git a/pi/Cargo.toml b/pi/Cargo.toml
-index a2a5cbe..d896e69 100644
+index a2a5cbe..d0ad11b 100644
 --- a/pi/Cargo.toml
 +++ b/pi/Cargo.toml
-@@ -5,6 +5,7 @@ authors = ["Sergio Benitez <sb@sergio.bz>"]
+@@ -5,6 +5,8 @@ authors = ["Sergio Benitez <sb@sergio.bz>"]
  
  [dependencies]
  volatile = { path = "../volatile" }
-+std = { path = "../std" }
++std = { path = "../std" , optional = true}
  
  [features]
 -std = []
 +qemu = []
++custom_std = ["std"]
 \ No newline at end of file
 diff --git a/pi/src/atags/atag.rs b/pi/src/atags/atag.rs
 index 641d2f2..78025eb 100644
@@ -2681,7 +2724,7 @@ index 0000000..42f034c
 +    Timer::new().tick_in(us)
 +}
 diff --git a/pi/src/uart.rs b/pi/src/uart.rs
-index 92b6159..e62c66b 100644
+index 92b6159..27298b5 100644
 --- a/pi/src/uart.rs
 +++ b/pi/src/uart.rs
 @@ -24,6 +24,26 @@ enum LsrStatus {
@@ -2818,37 +2861,39 @@ index 92b6159..e62c66b 100644
      //
      // The `io::Write::write()` method must write all of the requested bytes
      // before returning.
+-}
 +    impl io::Read for MiniUart {
-+       fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-+           match self.wait_for_byte() {
-+               Ok(()) => {
-+                   let mut index = 0;
-+                   while self.has_byte() && index < buf.len() {
-+                       buf[index] = self.read_byte();
-+                       index += 1;
-+                   }
-+                   Ok(index)
-+               },
-+               Err(()) => {
-+                   Err(io::Error::new(io::ErrorKind::TimedOut, "reading UART timed out"))
-+               }
-+           }
-+       }
++        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++            match self.wait_for_byte() {
++                Ok(()) => {
++                    let mut index = 0;
++                    while self.has_byte() && index < buf.len() {
++                        buf[index] = self.read_byte();
++                        index += 1;
++                    }
++                    Ok(index)
++                },
++                Err(()) => {
++                    Err(io::Error::new(io::ErrorKind::TimedOut, "reading UART timed out"))
++                }
++            }
++        }
 +    }
 +
 +    impl io::Write for MiniUart {
-+       fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-+           for byte in buf {
-+               self.write_byte(*byte);
-+           }
-+           Ok(buf.len())
-+       }
++        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++            for byte in buf {
++                self.write_byte(*byte);
++            }
++            Ok(buf.len())
++        }
 +
-+       fn flush(&mut self) -> io::Result<()> {
-+           unimplemented!()
-+       }
++        fn flush(&mut self) -> io::Result<()> {
++            unimplemented!()
++        }
 +    }
- }
++}
+\ No newline at end of file
 diff --git a/std/Cargo.toml b/std/Cargo.toml
 index 9096e5c..168f73d 100644
 --- a/std/Cargo.toml
