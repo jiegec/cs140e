@@ -1,0 +1,1 @@
+`self.0' is mutated, so `&self' should be mutable. Also, `x' needs to be mutable.

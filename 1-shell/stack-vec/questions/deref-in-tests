@@ -1,0 +1,3 @@
+The indexing and `iter()' methods requires `Deref' and sometimes `DerefMut' to convert a `StackVec' to a slice, which has the corresponding methods to call. It can be seen that `StackVec' act as a smart pointer to the underlying array.
+Because `DerefMut' relies on `Deref', without both, all indexing tests and iterator test fail to compile. 
+With only `Deref', mutable indexing test will fail to compile.

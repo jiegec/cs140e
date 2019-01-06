@@ -1,0 +1,1 @@
+Rust does not allow mutable borrowing after a immutable borrowing in the same scope.

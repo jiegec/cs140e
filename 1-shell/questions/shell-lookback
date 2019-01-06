@@ -1,0 +1,1 @@
+`StackVec' is extensively used for arrays, `Gpio' is used in `Uart' and `Console', and `Console' is used for printing to console.

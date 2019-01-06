@@ -1,0 +1,1 @@
+If user faked a GPIO pin to state `Input', but the pin has not been initialized to allow input, it would disobey the hardware's spec.

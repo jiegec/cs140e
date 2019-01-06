@@ -1,0 +1,1 @@
+The inner pointer field `self.0' is not public, thus can only be accessed indirectly by its public functions. `ReadVolatile' provides `read' and returns a const pointer to T for `inner'. `WriteVolatile' provides `write' but returns a mutable pointer to T for `inner', which might allow reading the pointer in fact.

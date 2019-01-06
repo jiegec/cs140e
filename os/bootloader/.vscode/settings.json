@@ -1,0 +1,4 @@
+{
+    "rust.target": "aarch64-none-elf",
+    "rust.sysroot": "/Users/macbookpro/.xargo"
+}

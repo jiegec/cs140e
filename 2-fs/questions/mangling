@@ -1,0 +1,1 @@
+In C++ and Rust, methods can be overloaded, so functions have to be identified by both its name and its argument types.

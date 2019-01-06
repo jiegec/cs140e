@@ -1,0 +1,1 @@
+`UniqueVolatile' means no pointer aliasing i.e. only one `UniqueVolatile' corresponds to the underlying pointer, allowing it to be thread safe. On the other side, `Volatile' does not have this restriction.

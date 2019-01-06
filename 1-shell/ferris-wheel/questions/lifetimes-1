@@ -1,0 +1,1 @@
+Make the return value of `inner' have the same lifetime as the wrapper itself. Then the compiler can deduce that all variables have the `static' lifetime.

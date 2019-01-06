@@ -1,0 +1,1 @@
+If multiple mutable references to a singleton exists, data race safety can no longer be guaranteed. By using a mutex, only one thread at a time can acquire the mutable reference.

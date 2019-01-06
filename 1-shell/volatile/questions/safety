@@ -1,0 +1,1 @@
+Because, `read' and `write' have no raw pointers in their function signature, yet `new' needs a raw pointer passed in.

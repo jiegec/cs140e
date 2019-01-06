@@ -1,0 +1,1 @@
+In this way, `self.0' can be accessed directly from the outside of the library, thus the safety implications can no longer hold.

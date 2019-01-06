@@ -1,0 +1,1 @@
+`write_fmt' comes from the default implementation in trait `alloc::fmt::Write', which calls`write_str' to print the result into UART.

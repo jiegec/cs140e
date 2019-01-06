@@ -1,0 +1,1 @@
+In C, the size is kept put before the memory address. In Rust, size and alignment is passed into `dealloc', so its implementation can be simplified, and size of the buffer is saved elsewhere e.g. len in String.

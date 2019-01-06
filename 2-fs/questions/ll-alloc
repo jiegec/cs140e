@@ -1,0 +1,1 @@
+It saves the list pointers in place. Because we are implementing the allocator, it's hard to dynamically allocate some space for storing the linked list.

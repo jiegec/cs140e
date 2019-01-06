@@ -1,0 +1,1 @@
+The attribute field is shared among regular entry and lfn entry. But a latter one has 0x0F in this field, which is impossible for a former one.

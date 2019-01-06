@@ -1,0 +1,1 @@
+Add #derive-s for `Duration'. `Debug' for output, `Copy' for multiple assignments and `Clone' for `Copy'.

@@ -1,0 +1,28 @@
+[package]
+name = "bootloader"
+version = "0.1.0"
+authors = ["Sergio Benitez <sb@sergio.bz>"]
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/kmain.rs"
+
+[profile.dev]
+panic = "abort"
+lto = true
+debug = true
+
+[profile.test]
+panic = "abort"
+lto = true
+debug = true
+
+[profile.release]
+panic = "abort"
+lto = true
+
+[dependencies]
+pi = { path = "../pi", features = ["std"] }
+
+# from assignment 1
+xmodem = { path = "../../1-shell/xmodem/" }

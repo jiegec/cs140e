@@ -1,0 +1,1 @@
+Replace `let x' with `let ref mut x' to make `x' a reference to a mutable integer. Using `&mut i32' as the type explicitly also does the trick.

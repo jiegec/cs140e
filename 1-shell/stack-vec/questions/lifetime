@@ -1,0 +1,1 @@
+Because the type itself has its lifetime, too, and the type must outlive the objects of it.

@@ -1,0 +1,1 @@
+Remove the #derive-s of `MyType', so multiple moves make the program not compiling.

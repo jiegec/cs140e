@@ -1,0 +1,1 @@
+We can limit `unsafe' to only a small portion of code that we can easily check, leaving rest of the code safe Rust. It's hard to enforce the same constraint in C.

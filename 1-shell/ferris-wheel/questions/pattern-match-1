@@ -1,0 +1,1 @@
+Use `ref' in pattern matching to prevent move and fix the lifetime error.

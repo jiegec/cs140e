@@ -1,0 +1,24 @@
+[package]
+name = "blinky"
+version = "0.1.0"
+
+[lib]
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+lto = true
+debug = true
+
+[profile.test]
+panic = "abort"
+lto = true
+debug = true
+
+[profile.release]
+panic = "abort"
+lto = true
+debug = true
+
+[dependencies]
+rlibc = "*"

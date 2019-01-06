@@ -1,0 +1,1 @@
+If timeout is not specified, the `NAK' sent from receiver may not arrive at the sender, so the sender has to wait for another `NAK' indefinitely, yet the bootloader will only send `NAK' again on timeout.

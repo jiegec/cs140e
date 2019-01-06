@@ -1,0 +1,1 @@
+The file system is wrapped in a Shared<VFat>, so only one thread can use the filesystem at a time.

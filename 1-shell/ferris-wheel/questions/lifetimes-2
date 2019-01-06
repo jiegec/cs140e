@@ -1,0 +1,1 @@
+Add the corresponding generics for the `RefWrapper' and also the same lifetime for the type `T'.

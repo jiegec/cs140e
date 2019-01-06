@@ -1,0 +1,36 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+authors = ["Sergio Benitez <sb@sergio.bz>"]
+links = "sd"
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/kmain.rs"
+
+[features]
+qemu = ["pi/qemu"]
+no_test = ["std", "fat32/custom_std", "pi/custom_std"]
+
+[profile.dev]
+panic = "abort"
+debug = true
+
+[profile.test]
+debug = true
+
+[profile.release]
+debug = true
+panic = "abort"
+lto = true
+
+[dependencies]
+pi = { path = "../pi" }
+
+# from assignment 1
+stack-vec = { path = "../../1-shell/stack-vec/" }
+
+# from assignment 2
+fat32 = { path = "../../2-fs/fat32/" }
+
+std = { path = "../std", optional = true }

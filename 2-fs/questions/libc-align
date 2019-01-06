@@ -1,0 +1,1 @@
+Because `malloc' returns a pointer that is aligned for any kind of type. It must return a pointer that is aligned to max alignment, which is 2*sizeof(int). 

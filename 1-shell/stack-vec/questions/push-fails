@@ -1,0 +1,1 @@
+Because `StackVec' uses a fixed stack memory for storing its items, but `Vec' expands its allocated memory region when necessary.

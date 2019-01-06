@@ -1,0 +1,4 @@
+To get /a/b/c.txt:
+Get root directory, from its entries, find one dir nameb a;
+Use /a, from its entries, find one dir named b;
+Use /a/b, from its entries, find one file named c.txt.

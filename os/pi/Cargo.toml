@@ -1,0 +1,12 @@
+[package]
+name = "pi"
+version = "0.1.0"
+authors = ["Sergio Benitez <sb@sergio.bz>"]
+
+[dependencies]
+volatile = { path = "../volatile" }
+std = { path = "../std" , optional = true}
+
+[features]
+qemu = []
+custom_std = ["std"]
