@@ -56,7 +56,7 @@ impl VFat {
             device: cached_device,
             bytes_per_sector: ebpb.bytes_per_sector,
             sectors_per_cluster: ebpb.sectors_per_cluster,
-            sectors_per_fat: sectors_per_fat,
+            sectors_per_fat,
             fat_start_sector: fat_start_sector + ebpb.reserved_sectors as u64,
             data_start_sector: fat_start_sector + ebpb.reserved_sectors as u64
                 + sectors_per_fat as u64 * ebpb.number_of_fats as u64,

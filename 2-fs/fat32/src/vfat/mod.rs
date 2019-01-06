@@ -22,6 +22,3 @@ pub use self::shared::Shared;
 pub(crate) use self::cache::{CachedDevice, Partition};
 pub(crate) use self::fat::{Status, FatEntry};
 pub(crate) use self::cluster::Cluster;
-
-#[cfg(test)]
-mod tests;

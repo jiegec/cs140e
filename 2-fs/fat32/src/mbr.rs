@@ -58,10 +58,10 @@ impl MasterBootRecord {
         let mut buf = [0u8; 512];
         let size = device.read_sector(0, &mut buf)?;
         if size != 512 {
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "unable to read 512 bytes of MBR",
-            ).into());
+            ).into())
         } else {
             let result: MasterBootRecord = unsafe { transmute_copy(&buf) };
             if result.magic != 0xaa55 {
@@ -75,7 +75,7 @@ impl MasterBootRecord {
                     return Err(Error::UnknownBootIndicator(i as u8));
                 }
             }
-            return Ok(result);
+            Ok(result)
         }
     }
 

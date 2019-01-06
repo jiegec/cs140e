@@ -25,24 +25,24 @@ pub struct FatEntry(u32);
 impl FatEntry {
     /// Returns the `Status` of the FAT entry `self`.
     pub(super) fn status(&self) -> Status {
-        let bits = self.0 & (0x0FFFFFFFu32);
+        let bits = self.0 & (0x0FFF_FFFFu32);
         match bits {
-            0x00000000 => {
+            0x0000_0000 => {
                 Free
             }
-            0x00000001 => {
+            0x0000_0001 => {
                 Reserved
             }
-            0x00000002 ... 0x0FFFFFEF => {
+            0x0000_0002 ... 0x0FFF_FFEF => {
                 Data(Cluster::from(self.0))
             }
-            0x0FFFFFF0 ... 0x0FFFFFF6 => {
+            0x0FFF_FFF0 ... 0x0FFF_FFF6 => {
                 Reserved
             }
-            0x0FFFFFF7 => {
+            0x0FFF_FFF7 => {
                 Bad
             }
-            0x0FFFFFF8 ... 0x0FFFFFFF => {
+            0x0FFF_FFF8 ... 0x0FFF_FFFF => {
                 Eoc(self.0)
             }
             _ => unreachable!()

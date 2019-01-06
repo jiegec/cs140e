@@ -52,16 +52,14 @@ impl CachedDevice {
         CachedDevice {
             device: Box::new(device),
             cache: HashMap::new(),
-            partition: partition,
+            partition,
         }
     }
 
     /// Maps a user's request for a sector `virt` to the physical sector and
     /// number of physical sectors required to access `virt`.
     fn virtual_to_physical(&self, virt: u64) -> (u64, u64) {
-        if self.device.sector_size() == self.partition.sector_size {
-            (virt, 1)
-        } else if virt < self.partition.start {
+        if self.device.sector_size() == self.partition.sector_size || virt < self.partition.start {
             (virt, 1)
         } else {
             let factor = self.partition.sector_size / self.device.sector_size();
@@ -100,8 +98,7 @@ impl CachedDevice {
             let (physical_sector, physical_sector_num) = self.virtual_to_physical(sector);
             let physical_sector_size = self.device.sector_size();
             let logical_sector_size = (physical_sector_size * physical_sector_num) as usize;
-            let mut new_vec = Vec::with_capacity(logical_sector_size);
-            new_vec.resize(logical_sector_size, 0);
+            let mut new_vec = vec![0; logical_sector_size];
             for i in 0..physical_sector_num {
                 self.device.read_sector(
                     physical_sector + i,
@@ -133,7 +130,7 @@ impl BlockDevice for CachedDevice {
         }
     }
 
-    fn write_sector(&mut self, n: u64, buf: &[u8]) -> io::Result<usize> {
+    fn write_sector(&mut self, _n: u64, _buf: &[u8]) -> io::Result<usize> {
         unimplemented!();
     }
 }

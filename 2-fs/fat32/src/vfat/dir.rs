@@ -1,15 +1,12 @@
-use std::mem::size_of;
 use std::ffi::OsStr;
-use std::char::decode_utf16;
-use std::borrow::Cow;
 use std::io;
+use std::mem::size_of;
 
-use traits;
-use util::VecExt;
-use vfat::{Cluster, Entry, File, Shared, VFat};
-use vfat::{Attributes, Date, Metadata, Time, Timestamp};
 use std::fmt;
 use std::str;
+use traits;
+use vfat::{Attributes, Metadata};
+use vfat::{Cluster, Entry, File, Shared, VFat};
 
 pub struct Dir {
     // FIXME: Fill me in.
@@ -54,10 +51,18 @@ pub struct VFatUnknownDirEntry {
     __r2: [u8; 20],
 }
 
+#[repr(C, packed)]
+#[derive(Default, Copy, Clone)]
+pub struct VFatDummyDirEntry {
+    __r1: [u8; 32],
+}
+
+#[derive(Copy, Clone)]
 pub union VFatDirEntry {
     unknown: VFatUnknownDirEntry,
     regular: VFatRegularDirEntry,
     long_filename: VFatLfnDirEntry,
+    dummy: VFatDummyDirEntry,
 }
 
 impl Dir {
@@ -79,7 +84,7 @@ impl Dir {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "name is not valid UTF-8 string",
-                ))
+                ));
             }
         };
         for entry in self.entries()? {
@@ -91,7 +96,7 @@ impl Dir {
     }
 
     pub fn name(&self) -> &str {
-        if self.long_name.len() > 0 {
+        if !self.long_name.is_empty() {
             self.long_name.as_str()
         } else {
             self.short_name.as_str()
@@ -101,7 +106,7 @@ impl Dir {
     pub(super) fn new_root(fs: &Shared<VFat>) -> Dir {
         let cluster = fs.borrow().root_dir_cluster;
         Dir {
-            cluster: cluster,
+            cluster,
             fs: fs.clone(),
             short_name: String::new(),
             long_name: String::new(),
@@ -112,7 +117,7 @@ impl Dir {
 
 // FIXME: Implement `trait::Dir` for `Dir`.
 pub struct EntryIterator {
-    data: Vec<u8>,
+    data: Vec<VFatDirEntry>,
     current_index: usize,
     fs: Shared<VFat>,
     bytes_per_cluster: u32,
@@ -122,15 +127,9 @@ impl Iterator for EntryIterator {
     type Item = Entry;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let entries: *const VFatDirEntry = self.data.as_ptr() as *const VFatDirEntry;
         let mut long_file_name = [0u16; 260];
-        while self.current_index * size_of::<VFatDirEntry>() < self.data.len() {
-            let current_entry: &VFatDirEntry = unsafe {
-                entries
-                    .offset(self.current_index as isize)
-                    .as_ref()
-                    .unwrap()
-            };
+        while self.current_index < self.data.len() {
+            let current_entry: &VFatDirEntry = &self.data[self.current_index];
             let unknown_entry = unsafe { current_entry.unknown };
             if unknown_entry.status == 0x00 {
                 // End of FAT
@@ -157,17 +156,17 @@ impl Iterator for EntryIterator {
                 }
             } else {
                 let regular_entry = unsafe { current_entry.regular };
-                let mut short_file_name = regular_entry.short_file_name.clone();
+                let mut short_file_name = regular_entry.short_file_name;
                 if short_file_name[0] == 0x05 {
                     // 0x05 is used for real 0xE5 as first byte
                     short_file_name[0] = 0xE5;
                 }
-                let name = str::from_utf8(&short_file_name).unwrap().trim_right();
+                let name = str::from_utf8(&short_file_name).unwrap().trim_end();
                 let ext = str::from_utf8(&regular_entry.short_file_extension)
                     .unwrap()
-                    .trim_right();
+                    .trim_end();
                 let mut short_name = String::from(name);
-                if ext.len() > 0 {
+                if !ext.is_empty() {
                     short_name.push_str(".");
                     short_name.push_str(ext);
                 }
@@ -182,7 +181,8 @@ impl Iterator for EntryIterator {
                     &long_file_name[0..len]
                 } else {
                     &long_file_name
-                }).unwrap();
+                })
+                .unwrap();
                 if regular_entry.metadata.attributes.directory() {
                     return Some(Entry::Dir(Dir {
                         cluster: Cluster::from(regular_entry.metadata.first_cluster()),
@@ -226,9 +226,22 @@ impl traits::Dir for Dir {
             fs_borrow.read_chain(self.cluster, &mut data)?;
             fs_borrow.bytes_per_sector as u32 * fs_borrow.sectors_per_cluster as u32
         };
+        let num_entries = data.len() / size_of::<VFatDirEntry>();
+        let mut entries = vec![
+            VFatDirEntry {
+                dummy: VFatDummyDirEntry::default(),
+            };
+            num_entries
+        ];
+        unsafe {
+            data.as_ptr().copy_to(
+                entries.as_mut_ptr() as *mut u8,
+                num_entries * size_of::<VFatDirEntry>(),
+            );
+        }
 
         Ok(EntryIterator {
-            data: data,
+            data: entries,
             current_index: 0,
             fs: self.fs.clone(),
             bytes_per_cluster,

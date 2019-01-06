@@ -1,5 +1,5 @@
 use traits;
-use vfat::{Cluster, Dir, File, Metadata};
+use vfat::{Dir, File, Metadata};
 
 // TODO: You may need to change this definition.
 #[derive(Debug)]
