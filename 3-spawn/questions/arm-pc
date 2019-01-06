@@ -1,0 +1,6 @@
+adr/ldr lr, A
+ret
+
+adr/ldr x0, A
+msr ELR_ELx, x0
+eret

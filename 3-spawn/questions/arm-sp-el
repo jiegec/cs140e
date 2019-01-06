@@ -1,0 +1,4 @@
+adr/ldr x0, B
+msr SP_ELn, x0
+mov x0, 1
+msr SPSR_ELx, x0
