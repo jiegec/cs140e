@@ -1,7 +1,6 @@
 use std::io;
 use std::fmt;
 
-use pi::uart;
 use pi::uart::MiniUart;
 
 use mutex::Mutex;

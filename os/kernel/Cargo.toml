@@ -24,6 +24,8 @@ panic = "abort"
 lto = true
 
 [dependencies]
+gimli = { version = "0.16.1", default-features = false, features = ["alloc"] }
+
 pi = { path = "../pi" }
 
 # from assignment 1

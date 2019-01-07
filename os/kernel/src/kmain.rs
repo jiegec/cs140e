@@ -33,6 +33,7 @@ pub mod traps;
 pub mod aarch64;
 pub mod process;
 pub mod vm;
+mod dwarf;
 
 #[cfg(not(test))]
 use allocator::Allocator;

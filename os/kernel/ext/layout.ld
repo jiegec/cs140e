@@ -28,6 +28,30 @@ SECTIONS {
     __bss_end = .;
   }
 
+  .debug_info : {
+    . = ALIGN(32);
+    PROVIDE(__debug_info_start = .);
+    KEEP(*(.debug_info .debug_info.*))
+    PROVIDE(__debug_info_end = .);
+    BYTE(0)
+  }
+
+  .debug_abbrev : {
+    . = ALIGN(32);
+    PROVIDE(__debug_abbrev_start = .);
+    KEEP(*(.debug_abbrev .debug_abbrev.*))
+    PROVIDE(__debug_abbrev_end = .);
+    BYTE(0)
+  }
+
+  .debug_str : {
+    . = ALIGN(32);
+    PROVIDE(__debug_str_start = .);
+    KEEP(*(.debug_str .debug_str.*))
+    PROVIDE(__debug_str_end = .);
+    BYTE(0)
+  }
+
   /* end of the binary */
   _end = ALIGN(8);
 

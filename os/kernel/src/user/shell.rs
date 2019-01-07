@@ -89,7 +89,7 @@ pub fn shell(prefix: &str) {
                 match path {
                     "atags" => atags(&command),
                     "brk" => brk(),
-                    "bt" => bt(),
+                    "bt" => aarch64::bt(),
                     "cat" => cat(&command, cwd.as_path()),
                     "cd" => cwd = cd(&command, cwd),
                     "current_el" => current_el(),
@@ -443,7 +443,8 @@ fn brk() {
 
 fn current_el() {
     // Does not work if CurrentEL is 0
-    // kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
+    #[cfg(not(test))]
+    kprintln!("Current EL is {}", unsafe { aarch64::current_el() });
 }
 
 fn sleep(command: &Command) {
@@ -460,28 +461,6 @@ fn sleep(command: &Command) {
         kprintln!("Failed with {}", error);
     } else {
         kprintln!("Slept for {} msec", time_elapsed);
-    }
-}
-
-extern "C" {
-    fn __text_start();
-    fn __text_end();
-}
-
-fn bt() {
-    #[cfg(not(test))]
-    unsafe {
-        let mut current_pc = aarch64::pc();
-        let mut current_fp = aarch64::fp();
-        let mut stack_num = 0;
-        kprintln!("#{} {:#018X}", stack_num, current_pc);
-        current_pc = aarch64::lr();
-        while current_pc >= __text_start as usize && current_pc <= __text_end as usize && current_fp as usize != 0 {
-            stack_num = stack_num + 1;
-            kprintln!("#{} {:#018X}", stack_num, current_pc);
-            current_pc = *(current_fp as *const usize).offset(1);
-            current_fp = *(current_fp as *const usize);
-        }
     }
 }
 

@@ -12,6 +12,7 @@ use self::syndrome::Syndrome;
 use self::irq::handle_irq;
 use self::syscall::handle_syscall;
 use user::shell as shell;
+use aarch64;
 
 #[cfg(feature = "qemu")]
 use pi::timer::Timer;
@@ -53,6 +54,7 @@ pub extern "C" fn handle_exception(info: Info, esr: u32, tf: &mut TrapFrame) {
         match syndrome {
             Syndrome::Brk(_) => {
                 kprintln!("Got {:?} from {:?}", syndrome, info.source);
+                aarch64::bt();
                 shell(" [brk]$ ");
 
                 tf.elr += 4; // Skip the current brk instruction

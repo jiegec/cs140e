@@ -1,3 +1,6 @@
+use console::kprintln;
+use dwarf;
+
 /// Returns the current stack pointer.
 #[inline(always)]
 pub fn sp() -> *const u8 {
@@ -82,5 +85,28 @@ pub unsafe fn affinity() -> usize {
 pub fn nop() {
     unsafe {
         asm!("nop" :::: "volatile");
+    }
+}
+
+extern "C" {
+    fn __text_start();
+    fn __text_end();
+}
+
+pub fn bt() {
+    #[cfg(not(test))]
+    unsafe {
+        let mut current_pc = lr();
+        let mut current_fp = fp();
+        let mut stack_num = 0;
+        while current_pc >= __text_start as usize && current_pc <= __text_end as usize && current_fp as usize != 0 {
+            kprintln!("#{} {:#018X} {}", stack_num, current_pc, 
+                dwarf::get_function_from_pc(current_pc).unwrap_or_else(|| "unknown".to_string()));
+            stack_num = stack_num + 1;
+            current_fp = *(current_fp as *const usize);
+            if current_fp as usize != 0 {
+                current_pc = *(current_fp as *const usize).offset(1);
+            }
+        }
     }
 }
