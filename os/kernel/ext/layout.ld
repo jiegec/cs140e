@@ -5,8 +5,10 @@ SECTIONS {
   _start = .;
 
   .text : {
-      KEEP(*(.text.init)) /* from init.S */
-      *(.text .text.* .gnu.linkonce.t*)
+    PROVIDE(__text_start = .);
+    KEEP(*(.text.init)) /* from init.S */
+    *(.text .text.* .gnu.linkonce.t*)
+    PROVIDE(__text_end = .);
   }
 
   .rodata : {

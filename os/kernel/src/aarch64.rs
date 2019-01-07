@@ -9,6 +9,39 @@ pub fn sp() -> *const u8 {
     ptr as *const u8
 }
 
+/// Returns the current frame pointer.
+#[inline(always)]
+pub fn fp() -> usize {
+    let ptr: usize;
+    unsafe {
+        asm!("mov $0, x29" : "=r"(ptr));
+    }
+
+    ptr
+}
+
+/// Returns the current link register.
+#[inline(always)]
+pub fn lr() -> usize {
+    let ptr: usize;
+    unsafe {
+        asm!("mov $0, x30" : "=r"(ptr));
+    }
+
+    ptr
+}
+
+/// Returns the current program counter.
+#[inline(always)]
+pub fn pc() -> usize {
+    let ptr: usize;
+    unsafe {
+        asm!("adr $0, ." : "=r"(ptr));
+    }
+
+    ptr
+}
+
 /// Returns the current exception level.
 ///
 /// # Safety

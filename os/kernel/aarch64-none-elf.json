@@ -26,5 +26,6 @@
   "target-family": "unix",
   "os": "ros",
   "target-pointer-width": "64",
-  "disable-redzone": true
+  "disable-redzone": true,
+  "eliminate-frame-pointer": false
 }
