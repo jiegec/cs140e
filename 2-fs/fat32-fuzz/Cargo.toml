@@ -1,0 +1,9 @@
+[package]
+name = "fat32-fuzz"
+version = "0.1.0"
+authors = ["Jiajie Chen <jiegec@qq.com>"]
+edition = "2018"
+
+[dependencies]
+fat32 = { path = "../fat32/" }
+afl = "0.4.3"

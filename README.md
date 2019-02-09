@@ -1,7 +1,7 @@
 cs140e
 =======================================
 
-My code for Stanford cs140e.
+My code for Stanford cs140e. See [archived copy of CS140e](https://cs140e.sergio.bz/).
 
 Using `alias code-rust="env RUST_TARGET_PATH=(pwd) RUST_LOG=rls=debug CARGO_INCREMENTAL=0 code-insiders"` in my fish config.
 
