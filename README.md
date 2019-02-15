@@ -14,7 +14,6 @@ Setup Rust toolchain:
 rustup toolchain install nightly-2019-01-01
 rustup component add rustfmt-preview rls-preview rust-src rust-analysis
 # in cs140e directory
-rustup override set nightly-2019-01-01
 cargo install cargo-xbuild
 ```
 
