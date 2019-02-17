@@ -14,7 +14,7 @@ impl Builder {
     }
 
     fn string<T: Into<String>>(&mut self, s: T) -> &mut Self {
-        self.string = Some(s.into())
+        self.string = Some(s.into());
         self
     }
 
