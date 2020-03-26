@@ -265,7 +265,7 @@ impl<T: io::Read + io::Write> Xmodem<T> {
         if buf.len() < 128 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "buf.len() should not be less than 129",
+                "buf.len() should not be less than 128",
             ));
         }
 
