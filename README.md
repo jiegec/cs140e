@@ -14,6 +14,8 @@ Setup Rust toolchain:
 rustup toolchain install nightly-2019-01-01
 rustup component add rustfmt-preview rls-preview rust-src rust-analysis
 # in cs140e directory
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fjiegec%2Fcs140e.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fjiegec%2Fcs140e?ref=badge_shield)
+
 cargo install cargo-xbuild
 ```
 
@@ -45,3 +47,7 @@ See also
 
 1. [My series blog posts on cs140e in Chinese](https://jiege.ch/programming/2018/02/04/thoughts-on-stanford-cs140e/).
 2. [Original CS140e](https://cs140e.sergio.bz/).
+
+
+## License
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fjiegec%2Fcs140e.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fjiegec%2Fcs140e?ref=badge_large)
